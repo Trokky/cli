@@ -1,0 +1,46 @@
+version: 2
+
+project_name: trokky
+
+builds:
+  - main: .
+    binary: trokky
+    ldflags:
+      - -s -w -X github.com/trokky/cli/cmd.version={{.Version}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats: ['tar.gz']
+    format_overrides:
+      - goos: windows
+        formats: ['zip']
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+brews:
+  - repository:
+      owner: trokky
+      name: homebrew-tap
+    homepage: "https://github.com/trokky/cli"
+    description: "CLI for managing Trokky CMS instances"
+    license: "MIT"
+    install: |
+      bin.install "trokky"
+    test: |
+      system "#{bin}/trokky", "--version"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
