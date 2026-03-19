@@ -10,9 +10,17 @@ Command-line tool for managing [Trokky CMS](https://github.com/Trokky/trokky) in
 brew install trokky/tap/trokky
 ```
 
-**From GitHub Releases:**
+**macOS / Linux (script):**
 
-Download the latest binary from [Releases](https://github.com/Trokky/cli/releases) and add it to your PATH.
+```bash
+curl -sSL https://raw.githubusercontent.com/Trokky/cli/main/install.sh | sh
+```
+
+Auto-detects OS and architecture, downloads the latest release.
+
+**Windows:**
+
+Download `trokky_*_windows_amd64.zip` from [Releases](https://github.com/Trokky/cli/releases), extract, and add to your PATH.
 
 **From source:**
 
