@@ -252,6 +252,10 @@ Example:
 		for _, collectionName := range restoreOrder {
 			schema, hasSchema := schemaMap[collectionName]
 
+			// Check if this is a singleton collection (check target, fallback to backup)
+			targetSchema, isTargetKnown := targetSchemaMap[collectionName]
+			isSingleton := (isTargetKnown && targetSchema.Singleton) || (hasSchema && schema.Singleton)
+
 			// Find document files for this collection
 			prefix := "collections/" + collectionName + "/"
 			var docFiles []*zip.File
@@ -308,10 +312,6 @@ Example:
 				// Sanitize
 				cleanDoc = backup.SanitizeDocument(cleanDoc)
 
-				// Determine if this is a singleton collection
-				targetSchema, isTargetKnown := targetSchemaMap[collectionName]
-				isSingleton := isTargetKnown && targetSchema.Singleton
-
 				// Create/update document
 				docJSON, err := json.Marshal(map[string]interface{}{"data": cleanDoc})
 				if err != nil {
@@ -324,7 +324,8 @@ Example:
 					// Singleton: use PUT to upsert with original ID
 					respData, err = c.Put("/collections/"+collectionName+"/"+originalID, bytes.NewReader(docJSON))
 					if err != nil {
-						// Fallback: try POST
+						// PUT failed — log and fallback to POST
+						fmt.Fprintf(cmd.ErrOrStderr(), "\n    Note: PUT failed for singleton %s/%s (%v), trying POST\n", collectionName, originalID, err)
 						respData, err = c.Post("/collections/"+collectionName, bytes.NewReader(docJSON))
 					}
 				} else {
