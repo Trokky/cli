@@ -289,10 +289,11 @@ func (c *Client) ExportMedia(outputDir string) (int, error) {
 			resp.Body.Close()
 			continue
 		}
-		_, err = io.Copy(f, resp.Body)
+		_, copyErr := io.Copy(f, resp.Body)
 		resp.Body.Close()
-		f.Close()
-		if err != nil {
+		closeErr := f.Close()
+		if copyErr != nil || closeErr != nil {
+			os.Remove(outFile)
 			continue
 		}
 		count++
