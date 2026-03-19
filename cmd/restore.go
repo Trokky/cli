@@ -186,6 +186,58 @@ Example:
 
 		// ID mappings for reference rewriting
 		idMappings := make(map[string]string)
+		mediaRestored := 0
+
+		// Restore media first (builds old ID -> new ID mappings)
+		if len(manifest.MediaIndex) > 0 {
+			if dryRun {
+				fmt.Printf("  [DRY RUN] Would restore %d media file(s)\n", len(manifest.MediaIndex))
+			} else {
+				fmt.Printf("  Restoring media... ")
+
+				// Build zip file lookup for media
+				mediaZipFiles := make(map[string]*zip.File)
+				for _, f := range zr.File {
+					if strings.HasPrefix(f.Name, "media/") {
+						// Strip "media/" prefix to get filename
+						name := f.Name[6:]
+						mediaZipFiles[name] = f
+					}
+				}
+
+				for oldID, mediaInfo := range manifest.MediaIndex {
+					zipFile, ok := mediaZipFiles[mediaInfo.Filename]
+					if !ok {
+						fmt.Fprintf(cmd.ErrOrStderr(), "\n    Warning: media file %s not found in archive\n", mediaInfo.Filename)
+						continue
+					}
+
+					rc, err := zipFile.Open()
+					if err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "\n    Warning: failed to open %s: %v\n", mediaInfo.Filename, err)
+						continue
+					}
+
+					result, err := c.UploadFile(mediaInfo.Filename, rc)
+					rc.Close()
+					if err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "\n    Warning: failed to upload %s: %v\n", mediaInfo.Filename, err)
+						continue
+					}
+
+					// Extract new ID from upload response
+					newID := extractMediaID(result)
+					if newID != "" {
+						idMappings[oldID] = newID
+						mediaRestored++
+					} else {
+						fmt.Fprintf(cmd.ErrOrStderr(), "\n    Warning: uploaded %s but could not extract new ID from response\n", mediaInfo.Filename)
+					}
+				}
+
+				fmt.Printf("%d/%d file(s)\n", mediaRestored, len(manifest.MediaIndex))
+			}
+		}
 
 		// Restore documents in order
 		totalRestored := 0
@@ -263,8 +315,8 @@ Example:
 						if _, putErr := c.Put("/collections/"+collectionName+"/"+originalID, bytes.NewReader(docJSON)); putErr != nil {
 							fmt.Fprintf(cmd.ErrOrStderr(), "\n    Warning: failed to create/update doc %s: %v\n", originalID, putErr)
 						} else {
-										idMappings[originalID] = originalID
-						restored++
+							idMappings[originalID] = originalID
+							restored++
 						}
 					}
 					continue
@@ -304,6 +356,7 @@ Example:
 		fmt.Println("Restore Summary")
 		fmt.Println("──────────────────────────────────────────────────")
 		fmt.Printf("Documents restored:    %d\n", totalRestored)
+		fmt.Printf("Media restored:        %d\n", mediaRestored)
 		fmt.Printf("References updated:    %d\n", totalRefsUpdated)
 		fmt.Printf("Collections:           %d\n", len(collectionsToRestore))
 		if dryRun {
@@ -315,6 +368,27 @@ Example:
 
 		return nil
 	},
+}
+
+// extractMediaID extracts the new media ID from an upload response.
+// Handles various response shapes: {files: [{id}]}, {file: {id}}, {id}, etc.
+func extractMediaID(result map[string]interface{}) string {
+	// Try {files: [{id: ...}]}
+	if files, ok := result["files"].([]interface{}); ok && len(files) > 0 {
+		if f, ok := files[0].(map[string]interface{}); ok {
+			if id := backup.ExtractDocID(f); id != "" {
+				return id
+			}
+		}
+	}
+	// Try {file: {id: ...}}
+	if file, ok := result["file"].(map[string]interface{}); ok {
+		if id := backup.ExtractDocID(file); id != "" {
+			return id
+		}
+	}
+	// Try direct {id: ...}
+	return backup.ExtractDocID(result)
 }
 
 func readManifestFromZip(zr *zip.Reader) (*backup.BackupManifest, error) {

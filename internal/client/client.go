@@ -1,9 +1,11 @@
 package client
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -292,9 +294,65 @@ func (c *Client) ExportMedia(outputDir string) (int, error) {
 	return count, nil
 }
 
-func (c *Client) ImportMedia(mediaDir string) (int, error) {
-	// TODO: implement media upload from directory
-	return 0, fmt.Errorf("media import not yet implemented")
+// UploadFile uploads a file to the media endpoint via multipart form.
+// Returns the parsed response body.
+func (c *Client) UploadFile(filename string, data io.Reader) (map[string]interface{}, error) {
+	// Build multipart body
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	part, err := writer.CreateFormFile("files", filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create form file: %w", err)
+	}
+
+	if _, err := io.Copy(part, data); err != nil {
+		return nil, fmt.Errorf("failed to write file data: %w", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close multipart writer: %w", err)
+	}
+
+	// Build request
+	uploadURL := c.BaseURL + "/media/upload"
+	req, err := http.NewRequest(http.MethodPost, uploadURL, &buf)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("upload failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read upload response: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("upload failed: HTTP %d: %s", resp.StatusCode, string(respData))
+	}
+
+	// Parse response — handle {success: true, data: ...} envelope
+	var envelope struct {
+		Success bool                   `json:"success"`
+		Data    map[string]interface{} `json:"data"`
+	}
+	if json.Unmarshal(respData, &envelope) == nil && envelope.Success && envelope.Data != nil {
+		return envelope.Data, nil
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(respData, &result); err != nil {
+		return nil, fmt.Errorf("invalid upload response: %w", err)
+	}
+	return result, nil
 }
 
 func (c *Client) GenerateTypes() (string, error) {

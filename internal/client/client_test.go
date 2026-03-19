@@ -655,16 +655,66 @@ func TestExportMedia_ChecksAuthHeader(t *testing.T) {
 	}
 }
 
-// --- ImportMedia() ---
+// --- UploadFile() ---
 
-func TestImportMedia_NotImplemented(t *testing.T) {
-	c := New("http://localhost", "token")
-	_, err := c.ImportMedia("/tmp/media")
-	if err == nil {
-		t.Fatal("expected error for unimplemented ImportMedia")
+func TestUploadFile_Success(t *testing.T) {
+	var gotContentType, gotAuth string
+	var gotBody []byte
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotContentType = r.Header.Get("Content-Type")
+		gotAuth = r.Header.Get("Authorization")
+		gotBody, _ = io.ReadAll(r.Body)
+
+		w.WriteHeader(201)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"data": map[string]interface{}{
+				"files": []map[string]string{
+					{"id": "media-new-123", "filename": "photo.jpg"},
+				},
+			},
+		})
+	})
+
+	c := New(server.URL, "my-token")
+	result, err := c.UploadFile("photo.jpg", strings.NewReader("fake-image-data"))
+	if err != nil {
+		t.Fatalf("UploadFile() error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "not yet implemented") {
-		t.Fatalf("expected 'not yet implemented' error, got %q", err.Error())
+	if gotAuth != "Bearer my-token" {
+		t.Fatalf("auth = %q", gotAuth)
+	}
+	if !strings.Contains(gotContentType, "multipart/form-data") {
+		t.Fatalf("Content-Type = %q, want multipart/form-data", gotContentType)
+	}
+	if !strings.Contains(string(gotBody), "fake-image-data") {
+		t.Fatal("body should contain file data")
+	}
+	if !strings.Contains(string(gotBody), "photo.jpg") {
+		t.Fatal("body should contain filename")
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	// Verify envelope was unwrapped — result should be the inner data
+	if _, ok := result["files"]; !ok {
+		t.Fatalf("expected result to contain 'files', got %v", result)
+	}
+}
+
+func TestUploadFile_ServerError(t *testing.T) {
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		w.Write([]byte("internal error"))
+	})
+
+	c := New(server.URL, "token")
+	_, err := c.UploadFile("test.jpg", strings.NewReader("data"))
+	if err == nil {
+		t.Fatal("expected error on 500")
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Fatalf("expected HTTP status in error, got %q", err.Error())
 	}
 }
 
