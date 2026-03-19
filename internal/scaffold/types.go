@@ -1,5 +1,7 @@
 package scaffold
 
+import "fmt"
+
 // Template represents the project template type.
 type Template string
 
@@ -85,6 +87,46 @@ type ProjectConfig struct {
 	Captcha         CaptchaProvider
 	I18n            I18nMode
 	IncludeExamples bool
+}
+
+// Validate checks that all config values are valid.
+func (cfg ProjectConfig) Validate() error {
+	switch cfg.DataAdapter {
+	case DataFilesystem, DataPostgres, DataD1:
+	default:
+		return fmt.Errorf("invalid data adapter %q (valid: filesystem, postgres, d1)", cfg.DataAdapter)
+	}
+	switch cfg.MediaAdapter {
+	case MediaFilesystem, MediaR2, MediaS3:
+	default:
+		return fmt.Errorf("invalid media adapter %q (valid: filesystem, r2, s3)", cfg.MediaAdapter)
+	}
+	switch cfg.Mail {
+	case MailNone, MailResend, MailConsole:
+	default:
+		return fmt.Errorf("invalid mail provider %q (valid: none, resend, console)", cfg.Mail)
+	}
+	switch cfg.Auth {
+	case AuthBasic, AuthOAuth, AuthNone:
+	default:
+		return fmt.Errorf("invalid auth mode %q (valid: basic, oauth, none)", cfg.Auth)
+	}
+	switch cfg.Studio {
+	case StudioEmbedded, StudioSeparate, StudioNone:
+	default:
+		return fmt.Errorf("invalid studio mode %q (valid: embedded, separate, none)", cfg.Studio)
+	}
+	switch cfg.Captcha {
+	case CaptchaNone, CaptchaTurnstile, CaptchaRecaptcha:
+	default:
+		return fmt.Errorf("invalid captcha provider %q (valid: none, turnstile, recaptcha)", cfg.Captcha)
+	}
+	switch cfg.I18n {
+	case I18nNone, I18nEn, I18nFr, I18nEnFr:
+	default:
+		return fmt.Errorf("invalid i18n mode %q (valid: none, en, fr, en-fr)", cfg.I18n)
+	}
+	return nil
 }
 
 // TemplateDefaults maps template names to their default configs.

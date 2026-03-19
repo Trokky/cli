@@ -124,6 +124,11 @@ Examples:
 			}
 		}
 
+		// Validate config
+		if err := cfg.Validate(); err != nil {
+			return err
+		}
+
 		// Scaffold
 		if err := scaffold.Scaffold(cfg, targetDir); err != nil {
 			return fmt.Errorf("scaffolding failed: %w", err)
