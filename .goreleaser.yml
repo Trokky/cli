@@ -24,9 +24,10 @@ archives:
 
 brews:
   - repository:
-      owner: trokky
+      owner: Trokky
       name: homebrew-tap
-    homepage: "https://github.com/trokky/cli"
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/Trokky/cli"
     description: "CLI for managing Trokky CMS instances"
     license: "MIT"
     install: |
