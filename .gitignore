@@ -1,4 +1,5 @@
 bin/
 dist/
+trokky
 *.exe
 .DS_Store
