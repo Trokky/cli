@@ -280,8 +280,8 @@ func (c *Client) ExportMedia(outputDir string) (int, error) {
 			continue
 		}
 
-		filename := item.Filename
-		if filename == "" {
+		filename := filepath.Base(item.Filename)
+		if filename == "" || filename == "." {
 			filename = item.ID
 		}
 		outFile := filepath.Join(outputDir, filename)

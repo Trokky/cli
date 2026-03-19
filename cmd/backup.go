@@ -84,8 +84,10 @@ Example:
 		if err != nil {
 			return fmt.Errorf("failed to create output file: %w", err)
 		}
+		defer zipFile.Close()
 
 		zw := zip.NewWriter(zipFile)
+		defer zw.Close()
 
 		// Backup documents
 		collectionStats := make(map[string]int)
