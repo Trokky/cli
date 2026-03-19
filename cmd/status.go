@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/trokky/cli/internal/client"
@@ -16,23 +18,33 @@ var statusCmd = &cobra.Command{
 			return err
 		}
 
+		fmt.Printf("Instance:    %s\n", c.BaseURL)
+
+		// Health check with timing
+		start := time.Now()
 		health, err := c.Health()
+		latency := time.Since(start)
+
 		if err != nil {
-			return fmt.Errorf("instance unreachable: %w", err)
+			fmt.Fprintf(os.Stderr, "Status:      DOWN\n")
+			fmt.Fprintf(os.Stderr, "Error:       %v\n", err)
+			return nil
 		}
 
-		fmt.Printf("Instance:  %s\n", c.BaseURL)
-		fmt.Printf("Status:    %s\n", health.Status)
-		fmt.Printf("Version:   %s\n", health.Version)
+		fmt.Printf("Status:      UP (%dms)\n", latency.Milliseconds())
+		if health.Version != "" {
+			fmt.Printf("Version:     %s\n", health.Version)
+		}
 
 		// List collections
 		collections, err := c.ListCollections()
 		if err == nil && len(collections) > 0 {
-			fmt.Printf("\nCollections:\n")
+			fmt.Printf("\nCollections: %d\n", len(collections))
 			for _, col := range collections {
 				stats, err := c.CollectionStats(col)
 				if err == nil {
-					fmt.Printf("  %-25s %d documents\n", col, stats.TotalDocuments)
+					fmt.Printf("  %-25s %d documents (%d published, %d draft)\n",
+						col, stats.TotalDocuments, stats.PublishedDocuments, stats.DraftDocuments)
 				} else {
 					fmt.Printf("  %s\n", col)
 				}
