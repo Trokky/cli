@@ -9,53 +9,110 @@ import (
 )
 
 var loginCmd = &cobra.Command{
-	Use:   "login [instance-url]",
-	Short: "Authenticate with a Trokky instance",
-	Long: `Login to a Trokky instance using username/password.
-The API token will be stored locally for subsequent commands.
+	Use:   "login <url>",
+	Short: "Login to a Trokky instance using browser authentication",
+	Long: `Authenticate with a Trokky instance using the OAuth2 device flow.
+A browser window will open for you to authorize access.
 
 Example:
   trokky login https://cms.example.com
-  trokky login http://localhost:3000`,
+  trokky login https://cms.example.com --name production`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		instanceURL := args[0]
+		rawURL := args[0]
 
-		username, _ := cmd.Flags().GetString("username")
-		password, _ := cmd.Flags().GetString("password")
+		baseURL := config.NormalizeBaseURL(rawURL)
 
-		if username == "" || password == "" {
-			var err error
-			username, password, err = auth.PromptCredentials()
-			if err != nil {
-				return fmt.Errorf("failed to read credentials: %w", err)
+		name, _ := cmd.Flags().GetString("name")
+		if name == "" {
+			name = auth.DeriveInstanceName(baseURL)
+		}
+		setDefault, _ := cmd.Flags().GetBool("set-default")
+
+		fmt.Println()
+		fmt.Println("Trokky CLI Login")
+		fmt.Println("────────────────────────────────────────")
+		fmt.Println()
+
+		// Start device authorization
+		fmt.Print("Starting device authorization... ")
+		deviceAuth, err := auth.StartDeviceAuth(baseURL)
+		if err != nil {
+			fmt.Println("failed")
+			return err
+		}
+		fmt.Println("done")
+
+		fmt.Println()
+		fmt.Println("To complete login:")
+		fmt.Println()
+		fmt.Printf("  1. Open this URL in your browser:\n")
+		fmt.Printf("     %s\n", deviceAuth.VerificationURI)
+		fmt.Println()
+		fmt.Printf("  2. Enter this code when prompted:\n")
+		fmt.Printf("     %s\n", deviceAuth.UserCode)
+		fmt.Println()
+
+		if deviceAuth.VerificationURIComplete != "" {
+			fmt.Printf("  Or open the complete URL directly:\n")
+			fmt.Printf("     %s\n", deviceAuth.VerificationURIComplete)
+			fmt.Println()
+		}
+
+		fmt.Printf("  Code expires in %d minutes\n", deviceAuth.ExpiresIn/60)
+		fmt.Println()
+
+		// Try to open browser
+		if deviceAuth.VerificationURIComplete != "" {
+			if err := auth.OpenBrowser(deviceAuth.VerificationURIComplete); err == nil {
+				fmt.Println("  Browser opened automatically")
+				fmt.Println()
 			}
 		}
 
-		token, err := auth.Login(instanceURL, username, password)
+		// Poll for token
+		fmt.Print("Waiting for authorization... ")
+		tokenResp, err := auth.PollForToken(baseURL, deviceAuth.DeviceCode, deviceAuth.Interval, deviceAuth.ExpiresIn)
 		if err != nil {
-			return fmt.Errorf("login failed: %w", err)
+			fmt.Println("failed")
+			return err
 		}
+		fmt.Println("authorized!")
 
-		cfg, err := config.Load()
+		// Save to config
+		err = config.AddInstance(name, config.InstanceConfig{
+			URL:            baseURL,
+			Token:          tokenResp.AccessToken,
+			RefreshToken:   tokenResp.RefreshToken,
+			AuthType:       config.AuthTypeOAuth2,
+			TokenExpiresAt: auth.ExpiresAtFromNow(tokenResp.ExpiresIn),
+			Description:    "Logged in via OAuth2 device flow",
+		}, setDefault)
 		if err != nil {
-			cfg = config.New()
-		}
-
-		cfg.SetInstance(instanceURL, token)
-		cfg.ActiveInstance = instanceURL
-
-		if err := cfg.Save(); err != nil {
 			return fmt.Errorf("failed to save config: %w", err)
 		}
 
-		fmt.Printf("✓ Logged in to %s\n", instanceURL)
+		fmt.Println()
+		fmt.Println("Login successful!")
+		fmt.Println()
+		fmt.Printf("  Instance: %s\n", name)
+		fmt.Printf("  URL:      %s\n", baseURL)
+		if tokenResp.Scope != "" {
+			fmt.Printf("  Scopes:   %s\n", tokenResp.Scope)
+		}
+		if setDefault {
+			fmt.Printf("  Default:  Yes\n")
+		}
+		fmt.Println()
+		fmt.Println("You can now use trokky commands without --url and --token flags.")
+		fmt.Println()
+
 		return nil
 	},
 }
 
 func init() {
-	loginCmd.Flags().StringP("username", "u", "", "username")
-	loginCmd.Flags().StringP("password", "p", "", "password")
+	loginCmd.Flags().String("name", "", "instance name (default: derived from URL hostname)")
+	loginCmd.Flags().Bool("set-default", true, "set this instance as the default")
 	rootCmd.AddCommand(loginCmd)
 }

@@ -1,15 +1,16 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
 
 var (
 	version = "dev"
-	cfgFile string
 )
 
 var rootCmd = &cobra.Command{
@@ -29,8 +30,20 @@ func Execute() {
 	}
 }
 
+// confirmPrompt asks the user for y/N confirmation. Returns true if confirmed.
+func confirmPrompt(message string) (bool, error) {
+	fmt.Printf("%s [y/N] ", message)
+	reader := bufio.NewReader(os.Stdin)
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		return false, err
+	}
+	answer := strings.TrimSpace(strings.ToLower(input))
+	return answer == "y" || answer == "yes", nil
+}
+
 func init() {
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default $HOME/.trokky/config.json)")
-	rootCmd.PersistentFlags().String("instance", "", "Trokky instance URL (overrides active instance)")
-	rootCmd.PersistentFlags().String("token", "", "API token (overrides stored token)")
+	rootCmd.PersistentFlags().String("url", "", "Trokky instance URL (or use TROKKY_URL env var)")
+	rootCmd.PersistentFlags().String("token", "", "API token (or use TROKKY_TOKEN env var)")
+	rootCmd.PersistentFlags().String("instance", "", "Use a specific configured instance")
 }
