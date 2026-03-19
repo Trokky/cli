@@ -2,7 +2,10 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"time"
 
+	"github.com/briandowns/spinner"
 	"github.com/spf13/cobra"
 	"github.com/trokky/cli/internal/auth"
 	"github.com/trokky/cli/internal/config"
@@ -35,13 +38,15 @@ Example:
 		fmt.Println()
 
 		// Start device authorization
-		fmt.Print("Starting device authorization... ")
+		s := spinner.New(spinner.CharSets[14], 100*time.Millisecond, spinner.WithWriter(os.Stderr))
+		s.Suffix = " Starting device authorization..."
+		s.Start()
 		deviceAuth, err := auth.StartDeviceAuth(baseURL)
+		s.Stop()
 		if err != nil {
-			fmt.Println("failed")
 			return err
 		}
-		fmt.Println("done")
+		fmt.Fprintln(os.Stderr, "✓ Device authorization started")
 
 		fmt.Println()
 		fmt.Println("To complete login:")
@@ -71,13 +76,14 @@ Example:
 		}
 
 		// Poll for token
-		fmt.Print("Waiting for authorization... ")
+		s.Suffix = " Waiting for authorization..."
+		s.Start()
 		tokenResp, err := auth.PollForToken(baseURL, deviceAuth.DeviceCode, deviceAuth.Interval, deviceAuth.ExpiresIn)
+		s.Stop()
 		if err != nil {
-			fmt.Println("failed")
 			return err
 		}
-		fmt.Println("authorized!")
+		fmt.Fprintln(os.Stderr, "✓ Authorization successful")
 
 		// Save to config
 		err = config.AddInstance(name, config.InstanceConfig{

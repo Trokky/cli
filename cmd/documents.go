@@ -53,8 +53,8 @@ Example:
 		countOnly, _ := cmd.Flags().GetBool("count")
 
 		// Validate format
-		if format != "json" && format != "ids-only" {
-			return fmt.Errorf("invalid format %q: must be 'json' or 'ids-only'", format)
+		if format != "json" && format != "ids-only" && format != "table" {
+			return fmt.Errorf("invalid format %q: must be 'json', 'table', or 'ids-only'", format)
 		}
 
 		// Build query params
@@ -138,6 +138,8 @@ Example:
 					fmt.Println(id)
 				}
 			}
+		case "table":
+			printDocsTable(docs)
 		default:
 			pretty, _ := json.MarshalIndent(docs, "", "  ")
 			fmt.Println(string(pretty))
@@ -228,6 +230,7 @@ Example:
 
 		collection := args[0]
 		dataFlag, _ := cmd.Flags().GetString("data")
+		status, _ := cmd.Flags().GetString("status")
 
 		docData, err := readDocumentInput(args[1:], dataFlag)
 		if err != nil {
@@ -235,10 +238,17 @@ Example:
 		}
 
 		// Wrap in {data: ...}
-		var docObj interface{}
+		var docObj map[string]interface{}
 		if err := json.Unmarshal(docData, &docObj); err != nil {
 			return fmt.Errorf("invalid JSON: %w", err)
 		}
+
+		if status != "" {
+			docObj["_status"] = status
+		}
+
+		// Client-side schema validation (best-effort)
+		validateDocIfPossible(c, collection, docObj)
 
 		body, _ := json.Marshal(map[string]interface{}{"data": docObj})
 		respData, err := c.Post("/collections/"+collection, bytes.NewReader(body))
@@ -274,16 +284,24 @@ Example:
 		collection := args[0]
 		id := args[1]
 		dataFlag, _ := cmd.Flags().GetString("data")
+		status, _ := cmd.Flags().GetString("status")
 
 		docData, err := readDocumentInput(args[2:], dataFlag)
 		if err != nil {
 			return err
 		}
 
-		var docObj interface{}
+		var docObj map[string]interface{}
 		if err := json.Unmarshal(docData, &docObj); err != nil {
 			return fmt.Errorf("invalid JSON: %w", err)
 		}
+
+		if status != "" {
+			docObj["_status"] = status
+		}
+
+		// Client-side schema validation (best-effort)
+		validateDocIfPossible(c, collection, docObj)
 
 		body, _ := json.Marshal(map[string]interface{}{"data": docObj})
 		path := "/collections/" + collection + "/" + id
@@ -359,6 +377,155 @@ Example:
 
 // --- helpers ---
 
+// validateDocIfPossible attempts to fetch the collection schema and validate
+// the document. Prints warnings but does not block the operation.
+func validateDocIfPossible(c *client.Client, collection string, doc map[string]interface{}) {
+	schemasData, err := c.Get("/collections")
+	if err != nil {
+		return // can't validate, proceed silently
+	}
+
+	schemas, err := backup.ParseSchemas(schemasData)
+	if err != nil {
+		return
+	}
+
+	for _, schema := range schemas {
+		if schema.Name == collection {
+			result := backup.ValidateDocument(doc, schema)
+			if !result.Valid {
+				fmt.Fprintf(os.Stderr, "Validation warnings:\n")
+				for _, e := range result.Errors {
+					fmt.Fprintf(os.Stderr, "  - %s\n", e)
+				}
+			}
+			return
+		}
+	}
+}
+
+func printDocsTable(docs []map[string]interface{}) {
+	if len(docs) == 0 {
+		fmt.Println("No documents found.")
+		return
+	}
+
+	// Collect all unique keys across documents for column headers
+	keySet := make(map[string]bool)
+	for _, doc := range docs {
+		for k := range doc {
+			keySet[k] = true
+		}
+	}
+
+	// Build ordered column list: id first, then sorted remaining
+	var columns []string
+	// Check for id/_id first
+	if keySet["id"] {
+		columns = append(columns, "id")
+		delete(keySet, "id")
+	} else if keySet["_id"] {
+		columns = append(columns, "_id")
+		delete(keySet, "_id")
+	}
+
+	// Add remaining columns in insertion order (sorted for consistency)
+	var remaining []string
+	for k := range keySet {
+		remaining = append(remaining, k)
+	}
+	// Sort for deterministic output
+	for i := 0; i < len(remaining); i++ {
+		for j := i + 1; j < len(remaining); j++ {
+			if remaining[j] < remaining[i] {
+				remaining[i], remaining[j] = remaining[j], remaining[i]
+			}
+		}
+	}
+	columns = append(columns, remaining...)
+
+	// Limit to reasonable number of columns
+	maxCols := 8
+	if len(columns) > maxCols {
+		columns = columns[:maxCols]
+	}
+
+	// Calculate column widths
+	widths := make([]int, len(columns))
+	for i, col := range columns {
+		widths[i] = len(col)
+	}
+	for _, doc := range docs {
+		for i, col := range columns {
+			val := formatCellValue(doc[col])
+			if len(val) > widths[i] {
+				widths[i] = len(val)
+			}
+		}
+	}
+
+	// Cap column widths
+	maxWidth := 40
+	for i := range widths {
+		if widths[i] > maxWidth {
+			widths[i] = maxWidth
+		}
+	}
+
+	// Print header
+	for i, col := range columns {
+		fmt.Printf("%-*s", widths[i]+2, col)
+	}
+	fmt.Println()
+
+	// Print separator
+	for i := range columns {
+		for j := 0; j < widths[i]; j++ {
+			fmt.Print("─")
+		}
+		fmt.Print("  ")
+	}
+	fmt.Println()
+
+	// Print rows
+	for _, doc := range docs {
+		for i, col := range columns {
+			val := formatCellValue(doc[col])
+			if len(val) > widths[i] {
+				val = val[:widths[i]-1] + "…"
+			}
+			fmt.Printf("%-*s", widths[i]+2, val)
+		}
+		fmt.Println()
+	}
+
+	fmt.Printf("\n%d document(s)\n", len(docs))
+}
+
+func formatCellValue(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	switch val := v.(type) {
+	case string:
+		return val
+	case float64:
+		if val == float64(int(val)) {
+			return fmt.Sprintf("%d", int(val))
+		}
+		return fmt.Sprintf("%g", val)
+	case bool:
+		if val {
+			return "true"
+		}
+		return "false"
+	case map[string]interface{}, []interface{}:
+		return "[...]"
+	default:
+		return fmt.Sprintf("%v", val)
+	}
+}
+
 func readDocumentInput(fileArgs []string, dataFlag string) ([]byte, error) {
 	// Priority 1: --data flag
 	if dataFlag != "" {
@@ -412,7 +579,7 @@ func init() {
 	docsListCmd.Flags().String("order", "asc", "sort order (asc or desc)")
 	docsListCmd.Flags().String("status", "", "filter by status (published or draft)")
 	docsListCmd.Flags().String("expand", "", "expand reference fields")
-	docsListCmd.Flags().String("format", "json", "output format (json, ids-only)")
+	docsListCmd.Flags().String("format", "json", "output format (json, table, ids-only)")
 	docsListCmd.Flags().Bool("count", false, "show document count only")
 
 	// get flags
@@ -421,9 +588,11 @@ func init() {
 
 	// create flags
 	docsCreateCmd.Flags().String("data", "", "inline JSON data")
+	docsCreateCmd.Flags().String("status", "", "document status (published or draft)")
 
 	// update flags
 	docsUpdateCmd.Flags().String("data", "", "inline JSON data")
+	docsUpdateCmd.Flags().String("status", "", "document status (published or draft)")
 
 	// delete flags
 	docsDeleteCmd.Flags().Bool("force", false, "skip confirmation prompt")
