@@ -152,6 +152,12 @@ Example:
 			}
 		}
 
+		// Build target schema lookup for singleton detection
+		targetSchemaMap := make(map[string]backup.SchemaDefinition)
+		for _, s := range targetSchemas {
+			targetSchemaMap[s.Name] = s
+		}
+
 		validation := backup.ValidateSchemaCompatibility(schemasToValidate, targetSchemas)
 		if !validation.Compatible {
 			fmt.Println("failed")
@@ -302,14 +308,30 @@ Example:
 				// Sanitize
 				cleanDoc = backup.SanitizeDocument(cleanDoc)
 
-				// Create document
+				// Determine if this is a singleton collection
+				targetSchema, isTargetKnown := targetSchemaMap[collectionName]
+				isSingleton := isTargetKnown && targetSchema.Singleton
+
+				// Create/update document
 				docJSON, err := json.Marshal(map[string]interface{}{"data": cleanDoc})
 				if err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "\n    Warning: failed to marshal doc: %v\n", err)
 					continue
 				}
 
-				respData, err := c.Post("/collections/"+collectionName, bytes.NewReader(docJSON))
+				var respData []byte
+				if isSingleton && originalID != "" {
+					// Singleton: use PUT to upsert with original ID
+					respData, err = c.Put("/collections/"+collectionName+"/"+originalID, bytes.NewReader(docJSON))
+					if err != nil {
+						// Fallback: try POST
+						respData, err = c.Post("/collections/"+collectionName, bytes.NewReader(docJSON))
+					}
+				} else {
+					// Regular document: POST to create
+					respData, err = c.Post("/collections/"+collectionName, bytes.NewReader(docJSON))
+				}
+
 				if err != nil {
 					if overwrite && originalID != "" {
 						if _, putErr := c.Put("/collections/"+collectionName+"/"+originalID, bytes.NewReader(docJSON)); putErr != nil {
@@ -324,16 +346,21 @@ Example:
 
 				// Extract new ID for mappings
 				if originalID != "" {
-					var result map[string]interface{}
-					if json.Unmarshal(respData, &result) == nil {
-						newID := backup.ExtractDocID(result)
-						if newID == "" {
-							if docResult, ok := result["document"].(map[string]interface{}); ok {
-								newID = backup.ExtractDocID(docResult)
+					if isSingleton {
+						// Singletons preserve their ID
+						idMappings[originalID] = originalID
+					} else {
+						var result map[string]interface{}
+						if json.Unmarshal(respData, &result) == nil {
+							newID := backup.ExtractDocID(result)
+							if newID == "" {
+								if docResult, ok := result["document"].(map[string]interface{}); ok {
+									newID = backup.ExtractDocID(docResult)
+								}
 							}
-						}
-						if newID != "" {
-							idMappings[originalID] = newID
+							if newID != "" {
+								idMappings[originalID] = newID
+							}
 						}
 					}
 				}
