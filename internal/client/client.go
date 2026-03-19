@@ -278,18 +278,21 @@ func (c *Client) ExportMedia(outputDir string) (int, error) {
 			continue
 		}
 
-		fileData, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			continue
-		}
-
 		filename := filepath.Base(item.Filename)
 		if filename == "" || filename == "." {
 			filename = item.ID
 		}
 		outFile := filepath.Join(outputDir, filename)
-		if err := os.WriteFile(outFile, fileData, 0644); err != nil {
+
+		f, err := os.Create(outFile)
+		if err != nil {
+			resp.Body.Close()
+			continue
+		}
+		_, err = io.Copy(f, resp.Body)
+		resp.Body.Close()
+		f.Close()
+		if err != nil {
 			continue
 		}
 		count++
