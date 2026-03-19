@@ -186,12 +186,39 @@ func (c *Client) ListCollections() ([]string, error) {
 		return nil, err
 	}
 
-	var collections []string
-	if err := json.Unmarshal(data, &collections); err != nil {
-		return nil, err
+	// Try as string array
+	var names []string
+	if json.Unmarshal(data, &names) == nil {
+		return names, nil
 	}
 
-	return collections, nil
+	// Try as direct array of schema objects
+	var schemas []struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(data, &schemas) == nil && len(schemas) > 0 {
+		names = make([]string, len(schemas))
+		for i, s := range schemas {
+			names[i] = s.Name
+		}
+		return names, nil
+	}
+
+	// Try as object with "collections" key: {"collections": [...]}
+	var wrapper struct {
+		Collections []struct {
+			Name string `json:"name"`
+		} `json:"collections"`
+	}
+	if json.Unmarshal(data, &wrapper) == nil && len(wrapper.Collections) > 0 {
+		names = make([]string, len(wrapper.Collections))
+		for i, s := range wrapper.Collections {
+			names[i] = s.Name
+		}
+		return names, nil
+	}
+
+	return nil, nil
 }
 
 func (c *Client) CollectionStats(collection string) (*CollectionStats, error) {
