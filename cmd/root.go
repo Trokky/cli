@@ -46,4 +46,5 @@ func init() {
 	rootCmd.PersistentFlags().String("url", "", "Trokky instance URL (or use TROKKY_URL env var)")
 	rootCmd.PersistentFlags().String("token", "", "API token (or use TROKKY_TOKEN env var)")
 	rootCmd.PersistentFlags().String("instance", "", "Use a specific configured instance")
+	rootCmd.PersistentFlags().BoolP("quiet", "q", false, "suppress informational output")
 }

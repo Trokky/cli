@@ -66,10 +66,14 @@ func FromContext(cmd *cobra.Command) (*Client, error) {
 			return nil, err
 		}
 		resolvedToken = tok
-		if refreshed {
-			fmt.Fprintf(os.Stderr, "Using instance: %s (%s) (token refreshed)\n", creds.InstanceName, creds.URL)
-		} else {
-			fmt.Fprintf(os.Stderr, "Using instance: %s (%s)\n", creds.InstanceName, creds.URL)
+
+		quiet, _ := cmd.Flags().GetBool("quiet")
+		if !quiet {
+			if refreshed {
+				fmt.Fprintf(os.Stderr, "Using instance: %s (%s) (token refreshed)\n", creds.InstanceName, creds.URL)
+			} else {
+				fmt.Fprintf(os.Stderr, "Using instance: %s (%s)\n", creds.InstanceName, creds.URL)
+			}
 		}
 	}
 

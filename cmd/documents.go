@@ -427,7 +427,6 @@ func init() {
 
 	// delete flags
 	docsDeleteCmd.Flags().Bool("force", false, "skip confirmation prompt")
-	docsDeleteCmd.Flags().Bool("quiet", false, "suppress output")
 
 	// Register subcommands
 	documentsCmd.AddCommand(docsListCmd)
