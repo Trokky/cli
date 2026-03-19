@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -247,8 +248,10 @@ Example:
 			docObj["_status"] = status
 		}
 
-		// Client-side schema validation (best-effort)
-		validateDocIfPossible(c, collection, docObj)
+		// Client-side schema validation (opt-in)
+		if validate, _ := cmd.Flags().GetBool("validate"); validate {
+			validateDocIfPossible(c, collection, docObj)
+		}
 
 		body, _ := json.Marshal(map[string]interface{}{"data": docObj})
 		respData, err := c.Post("/collections/"+collection, bytes.NewReader(body))
@@ -300,8 +303,10 @@ Example:
 			docObj["_status"] = status
 		}
 
-		// Client-side schema validation (best-effort)
-		validateDocIfPossible(c, collection, docObj)
+		// Client-side schema validation (opt-in)
+		if validate, _ := cmd.Flags().GetBool("validate"); validate {
+			validateDocIfPossible(c, collection, docObj)
+		}
 
 		body, _ := json.Marshal(map[string]interface{}{"data": docObj})
 		path := "/collections/" + collection + "/" + id
@@ -434,14 +439,7 @@ func printDocsTable(docs []map[string]interface{}) {
 	for k := range keySet {
 		remaining = append(remaining, k)
 	}
-	// Sort for deterministic output
-	for i := 0; i < len(remaining); i++ {
-		for j := i + 1; j < len(remaining); j++ {
-			if remaining[j] < remaining[i] {
-				remaining[i], remaining[j] = remaining[j], remaining[i]
-			}
-		}
-	}
+	sort.Strings(remaining)
 	columns = append(columns, remaining...)
 
 	// Limit to reasonable number of columns
@@ -519,7 +517,9 @@ func formatCellValue(v interface{}) string {
 			return "true"
 		}
 		return "false"
-	case map[string]interface{}, []interface{}:
+	case map[string]interface{}:
+		return "{...}"
+	case []interface{}:
 		return "[...]"
 	default:
 		return fmt.Sprintf("%v", val)
@@ -589,10 +589,12 @@ func init() {
 	// create flags
 	docsCreateCmd.Flags().String("data", "", "inline JSON data")
 	docsCreateCmd.Flags().String("status", "", "document status (published or draft)")
+	docsCreateCmd.Flags().Bool("validate", false, "validate document against schema before sending")
 
 	// update flags
 	docsUpdateCmd.Flags().String("data", "", "inline JSON data")
 	docsUpdateCmd.Flags().String("status", "", "document status (published or draft)")
+	docsUpdateCmd.Flags().Bool("validate", false, "validate document against schema before sending")
 
 	// delete flags
 	docsDeleteCmd.Flags().Bool("force", false, "skip confirmation prompt")

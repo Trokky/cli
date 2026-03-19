@@ -19,6 +19,7 @@ type ValidationResult struct {
 }
 
 // ValidateDocument checks a document against a schema definition.
+// Validates top-level fields only; nested object/array contents are not checked.
 // Returns validation errors for missing required fields and type mismatches.
 func ValidateDocument(doc map[string]interface{}, schema SchemaDefinition) ValidationResult {
 	result := ValidationResult{Valid: true}
