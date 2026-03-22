@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/trokky/cli/internal/backup"
@@ -50,6 +51,11 @@ Example:
 
 		if manifest.Version != backup.ManifestVersion {
 			return fmt.Errorf("unsupported backup version: %s (expected %s)", manifest.Version, backup.ManifestVersion)
+		}
+
+		// Ensure schema fields are parsed (handles map-based field format)
+		for i := range manifest.Schemas {
+			manifest.Schemas[i].UnmarshalFields()
 		}
 
 		fmt.Printf("Backup from %s\n", manifest.Timestamp)
@@ -170,8 +176,9 @@ Example:
 
 		// Clean existing data if requested
 		if clean && !dryRun {
-			fmt.Print("Cleaning existing data... ")
-			deletedCount := 0
+			// Clean documents
+			fmt.Print("Cleaning existing documents... ")
+			deletedDocs := 0
 			for _, collection := range collectionsToRestore {
 				data, err := c.Get("/collections/" + collection + "?limit=10000")
 				if err != nil {
@@ -182,12 +189,43 @@ Example:
 					docID := backup.ExtractDocID(doc)
 					if docID != "" {
 						if _, err := c.Delete("/collections/" + collection + "/" + docID); err == nil {
-							deletedCount++
+							deletedDocs++
 						}
 					}
 				}
 			}
-			fmt.Printf("%d document(s) deleted\n", deletedCount)
+			fmt.Printf("%d document(s) deleted\n", deletedDocs)
+
+			// Clean media (paginated with rate-limit handling)
+			fmt.Print("Cleaning existing media... ")
+			deletedMedia := 0
+			for {
+				mediaData, err := c.Get("/media?limit=100")
+				if err != nil {
+					break
+				}
+				var mediaItems []struct {
+					ID string `json:"id"`
+				}
+				if json.Unmarshal(mediaData, &mediaItems) != nil || len(mediaItems) == 0 {
+					break
+				}
+				for _, item := range mediaItems {
+					for attempt := 1; attempt <= 3; attempt++ {
+						_, err := c.Delete("/media/" + item.ID)
+						if err == nil {
+							deletedMedia++
+							break
+						}
+						if attempt < 3 {
+							time.Sleep(time.Duration(attempt) * time.Second)
+						}
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+				fmt.Printf("\r  Cleaning existing media... %d deleted", deletedMedia)
+			}
+			fmt.Printf("\r  Cleaning existing media... %d file(s) deleted\n", deletedMedia)
 		}
 
 		// ID mappings for reference rewriting
@@ -211,23 +249,42 @@ Example:
 					}
 				}
 
+				mediaTotal := len(manifest.MediaIndex)
+				mediaFailed := 0
+				i := 0
+
 				for oldID, mediaInfo := range manifest.MediaIndex {
+					i++
 					zipFile, ok := mediaZipFiles[mediaInfo.Filename]
 					if !ok {
 						fmt.Fprintf(cmd.ErrOrStderr(), "\n    Warning: media file %s not found in archive\n", mediaInfo.Filename)
+						mediaFailed++
 						continue
 					}
 
-					rc, err := zipFile.Open()
-					if err != nil {
-						fmt.Fprintf(cmd.ErrOrStderr(), "\n    Warning: failed to open %s: %v\n", mediaInfo.Filename, err)
-						continue
+					// Retry up to 3 times with backoff
+					var result map[string]interface{}
+					var uploadErr error
+					for attempt := 1; attempt <= 3; attempt++ {
+						rc, err := zipFile.Open()
+						if err != nil {
+							uploadErr = err
+							break
+						}
+						result, uploadErr = c.UploadFile(mediaInfo.Filename, rc)
+						rc.Close()
+						if uploadErr == nil {
+							break
+						}
+						if attempt < 3 {
+							delay := time.Duration(attempt) * 2 * time.Second
+							time.Sleep(delay)
+						}
 					}
 
-					result, err := c.UploadFile(mediaInfo.Filename, rc)
-					rc.Close()
-					if err != nil {
-						fmt.Fprintf(cmd.ErrOrStderr(), "\n    Warning: failed to upload %s: %v\n", mediaInfo.Filename, err)
+					if uploadErr != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "\n    Warning: failed to upload %s (after 3 attempts): %v\n", mediaInfo.Filename, uploadErr)
+						mediaFailed++
 						continue
 					}
 
@@ -237,11 +294,21 @@ Example:
 						idMappings[oldID] = newID
 						mediaRestored++
 					} else {
-						fmt.Fprintf(cmd.ErrOrStderr(), "\n    Warning: uploaded %s but could not extract new ID from response\n", mediaInfo.Filename)
+						fmt.Fprintf(cmd.ErrOrStderr(), "\n    Warning: uploaded %s but could not extract new ID\n", mediaInfo.Filename)
+						mediaFailed++
 					}
+
+					// Progress indicator
+					fmt.Fprintf(cmd.OutOrStdout(), "\r  Restoring media... %d/%d (%d failed)", mediaRestored, mediaTotal, mediaFailed)
+
+					// Small delay between uploads to avoid overwhelming the server
+					time.Sleep(200 * time.Millisecond)
 				}
 
-				fmt.Printf("%d/%d file(s)\n", mediaRestored, len(manifest.MediaIndex))
+				fmt.Fprintf(cmd.OutOrStdout(), "\r  Restoring media... %d/%d file(s)              \n", mediaRestored, mediaTotal)
+				if mediaFailed > 0 {
+					fmt.Fprintf(cmd.ErrOrStderr(), "    %d file(s) failed\n", mediaFailed)
+				}
 			}
 		}
 
@@ -302,11 +369,17 @@ Example:
 				// Strip system fields
 				cleanDoc := backup.StripSystemFields(doc)
 
-				// Update references
-				if hasSchema && len(idMappings) > 0 {
-					var refCount int
-					cleanDoc, refCount = backup.UpdateReferences(cleanDoc, schema, idMappings)
-					totalRefsUpdated += refCount
+				// Update references (schema-aware + deep scan + string replacement)
+				if len(idMappings) > 0 {
+					if hasSchema && len(schema.Fields) > 0 {
+						var refCount int
+						cleanDoc, refCount = backup.UpdateReferences(cleanDoc, schema, idMappings)
+						totalRefsUpdated += refCount
+					}
+					// Deep scan as safety net — catches any asset._ref the schema pass missed
+					totalRefsUpdated += backup.DeepUpdateMediaRefs(cleanDoc, idMappings)
+					// String replacement — rewrites media IDs embedded in richtext HTML
+					totalRefsUpdated += backup.DeepReplaceMediaIDsInStrings(cleanDoc, idMappings)
 				}
 
 				// Sanitize

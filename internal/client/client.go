@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"os"
 	"path/filepath"
 	"strings"
@@ -227,12 +229,21 @@ func (c *Client) CollectionStats(collection string) (*CollectionStats, error) {
 		return nil, err
 	}
 
+	// Try direct unmarshal
 	var stats CollectionStats
-	if err := json.Unmarshal(data, &stats); err != nil {
+	if json.Unmarshal(data, &stats) == nil && stats.TotalDocuments > 0 {
+		return &stats, nil
+	}
+
+	// Try {stats: {...}} wrapper
+	var wrapper struct {
+		Stats CollectionStats `json:"stats"`
+	}
+	if err := json.Unmarshal(data, &wrapper); err != nil {
 		return nil, err
 	}
 
-	return &stats, nil
+	return &wrapper.Stats, nil
 }
 
 func (c *Client) ExportCollection(collection string) ([]byte, error) {
@@ -336,7 +347,17 @@ func (c *Client) UploadFile(filename string, data io.Reader) (map[string]interfa
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 
-	part, err := writer.CreateFormFile("files", filename)
+	// Detect MIME type from filename extension
+	mimeType := mime.TypeByExtension(filepath.Ext(filename))
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="files"; filename="%s"`, filename))
+	h.Set("Content-Type", mimeType)
+
+	part, err := writer.CreatePart(h)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create form file: %w", err)
 	}

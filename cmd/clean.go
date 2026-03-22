@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/trokky/cli/internal/backup"
@@ -123,39 +125,65 @@ Or use --dry-run to preview what would be deleted first.
 			}
 		}
 
-		// Clean media
+		// Clean media (paginated, with rate-limit handling)
 		if !documentsOnly {
-			fmt.Print("Cleaning media files... ")
+			fmt.Print("Cleaning media files...\n")
 
-			mediaData, err := c.Get("/media?limit=10000")
-			if err != nil {
-				fmt.Println("failed")
-				fmt.Fprintf(os.Stderr, "  Warning: failed to list media: %v\n", err)
-			} else {
+			totalMediaCount := 0
+			for {
+				mediaData, err := c.Get("/media?limit=100")
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  Warning: failed to list media: %v\n", err)
+					break
+				}
+
 				var mediaItems []struct {
 					ID       string `json:"id"`
 					Filename string `json:"filename"`
 				}
-
-				if err := json.Unmarshal(mediaData, &mediaItems); err == nil {
-					if len(mediaItems) == 0 {
-						fmt.Println("no media files")
-					} else if dryRun {
-						fmt.Printf("[DRY RUN] Would delete %d media file(s)\n", len(mediaItems))
-						totalMediaDeleted = len(mediaItems)
-					} else {
-						for _, item := range mediaItems {
-							if _, err := c.Delete("/media/" + item.ID); err != nil {
-								fmt.Fprintf(os.Stderr, "  Warning: failed to delete media %s: %v\n", item.ID, err)
-							} else {
-								totalMediaDeleted++
-							}
-						}
-						fmt.Printf("deleted %d/%d file(s)\n", totalMediaDeleted, len(mediaItems))
-					}
-				} else {
-					fmt.Printf("failed to parse media list: %v\n", err)
+				if err := json.Unmarshal(mediaData, &mediaItems); err != nil {
+					fmt.Fprintf(os.Stderr, "  Warning: failed to parse media list: %v\n", err)
+					break
 				}
+
+				if len(mediaItems) == 0 {
+					break
+				}
+
+				if totalMediaCount == 0 && dryRun {
+					// For dry-run, just report the first batch count
+					fmt.Printf("  [DRY RUN] Would delete media files (at least %d)\n", len(mediaItems))
+					totalMediaDeleted = len(mediaItems)
+					break
+				}
+
+				totalMediaCount += len(mediaItems)
+				for _, item := range mediaItems {
+					if dryRun {
+						continue
+					}
+					// Retry with backoff on rate limit
+					for attempt := 1; attempt <= 3; attempt++ {
+						_, err := c.Delete("/media/" + item.ID)
+						if err == nil {
+							totalMediaDeleted++
+							break
+						}
+						if attempt < 3 && (strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "rate")) {
+							time.Sleep(time.Duration(attempt) * time.Second)
+							continue
+						}
+						fmt.Fprintf(os.Stderr, "  Warning: failed to delete media %s: %v\n", item.ID, err)
+						break
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+
+				fmt.Printf("  Deleted %d media file(s) so far...\n", totalMediaDeleted)
+			}
+
+			if totalMediaDeleted > 0 || totalMediaCount == 0 {
+				fmt.Printf("  Media cleanup done: %d file(s) deleted\n", totalMediaDeleted)
 			}
 		}
 

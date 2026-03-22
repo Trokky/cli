@@ -3,6 +3,7 @@ package backup
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // UpdateReferences rewrites document references using idMappings (oldID -> newID).
@@ -87,6 +88,104 @@ func updateRefsRecursive(obj map[string]interface{}, fields []FieldDefinition, i
 	}
 }
 
+// DeepUpdateMediaRefs walks the entire document tree and rewrites any asset._ref
+// values found in idMappings. This is a safety net that doesn't require schema info.
+func DeepUpdateMediaRefs(doc map[string]interface{}, idMappings map[string]string) int {
+	count := 0
+	deepUpdateRefs(doc, idMappings, &count)
+	return count
+}
+
+func deepUpdateRefs(obj interface{}, idMappings map[string]string, count *int) {
+	switch v := obj.(type) {
+	case map[string]interface{}:
+		// Check if this is a media asset reference: {asset: {_ref: "media-xxx"}}
+		if asset, ok := v["asset"].(map[string]interface{}); ok {
+			if ref, ok := asset["_ref"].(string); ok {
+				if newID, mapped := idMappings[ref]; mapped {
+					asset["_ref"] = newID
+					*count++
+				}
+			}
+		}
+		// Check direct _ref (for reference fields)
+		if ref, ok := v["_ref"].(string); ok {
+			if newID, mapped := idMappings[ref]; mapped {
+				v["_ref"] = newID
+				*count++
+			}
+		}
+		// Recurse into all values
+		for _, val := range v {
+			deepUpdateRefs(val, idMappings, count)
+		}
+	case []interface{}:
+		for _, item := range v {
+			deepUpdateRefs(item, idMappings, count)
+		}
+	}
+}
+
+// DeepReplaceMediaIDsInStrings walks the entire document and replaces old media IDs
+// with new IDs inside string values (e.g. richtext HTML containing /api/media/media-xxx/file).
+func DeepReplaceMediaIDsInStrings(doc map[string]interface{}, idMappings map[string]string) int {
+	count := 0
+	replaceInStrings(doc, idMappings, &count)
+	return count
+}
+
+func replaceInStrings(obj interface{}, idMappings map[string]string, count *int) {
+	switch v := obj.(type) {
+	case map[string]interface{}:
+		for key, val := range v {
+			if s, ok := val.(string); ok {
+				replaced := s
+				for oldID, newID := range idMappings {
+					if oldID != "" && newID != "" && oldID != newID {
+						if idx := len(replaced); idx > 0 {
+							// Only scan strings that actually contain a media ID
+							if containsString(replaced, oldID) {
+								replaced = replaceAll(replaced, oldID, newID)
+							}
+						}
+					}
+				}
+				if replaced != s {
+					v[key] = replaced
+					*count++
+				}
+			} else {
+				replaceInStrings(val, idMappings, count)
+			}
+		}
+	case []interface{}:
+		for i, item := range v {
+			if s, ok := item.(string); ok {
+				replaced := s
+				for oldID, newID := range idMappings {
+					if oldID != "" && newID != "" && oldID != newID && containsString(replaced, oldID) {
+						replaced = replaceAll(replaced, oldID, newID)
+					}
+				}
+				if replaced != s {
+					v[i] = replaced
+					*count++
+				}
+			} else {
+				replaceInStrings(item, idMappings, count)
+			}
+		}
+	}
+}
+
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) && strings.Contains(s, substr)
+}
+
+func replaceAll(s, old, new string) string {
+	return strings.ReplaceAll(s, old, new)
+}
+
 // SanitizeDocument removes null values, empty objects, and old media formats.
 func SanitizeDocument(obj map[string]interface{}) map[string]interface{} {
 	return sanitizeRecursive(obj)
@@ -169,13 +268,29 @@ func ExtractDocID(doc map[string]interface{}) string {
 	return ""
 }
 
-// ParseSchemas parses schema data, trying []SchemaDefinition then falling back to []string.
+// ParseSchemas parses schema data, handling multiple API response formats.
 func ParseSchemas(data []byte) ([]SchemaDefinition, error) {
+	// Try direct []SchemaDefinition
 	var schemas []SchemaDefinition
 	if err := json.Unmarshal(data, &schemas); err == nil && len(schemas) > 0 {
+		for i := range schemas {
+			schemas[i].UnmarshalFields()
+		}
 		return schemas, nil
 	}
 
+	// Try {collections: [...]} wrapper
+	var wrapper struct {
+		Collections []SchemaDefinition `json:"collections"`
+	}
+	if err := json.Unmarshal(data, &wrapper); err == nil && len(wrapper.Collections) > 0 {
+		for i := range wrapper.Collections {
+			wrapper.Collections[i].UnmarshalFields()
+		}
+		return wrapper.Collections, nil
+	}
+
+	// Try []string (just names)
 	var names []string
 	if err := json.Unmarshal(data, &names); err != nil {
 		return nil, fmt.Errorf("failed to parse schemas: %w", err)

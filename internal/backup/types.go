@@ -29,7 +29,34 @@ type SchemaDefinition struct {
 	Description string            `json:"description,omitempty"`
 	Type        string            `json:"type,omitempty"` // "document" or "singleton"
 	Singleton   bool              `json:"singleton,omitempty"`
-	Fields      []FieldDefinition `json:"fields"`
+	Fields      []FieldDefinition `json:"-"` // custom unmarshaling
+	RawFields   json.RawMessage   `json:"fields,omitempty"`
+}
+
+// UnmarshalFields parses RawFields into Fields, handling both array and map formats.
+func (s *SchemaDefinition) UnmarshalFields() {
+	if s.RawFields == nil {
+		return
+	}
+
+	// Try array format first
+	var arr []FieldDefinition
+	if json.Unmarshal(s.RawFields, &arr) == nil {
+		s.Fields = arr
+		return
+	}
+
+	// Try map format: {"fieldName": {type, title, ...}}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(s.RawFields, &m) == nil {
+		for name, raw := range m {
+			var fd FieldDefinition
+			if json.Unmarshal(raw, &fd) == nil {
+				fd.Name = name
+				s.Fields = append(s.Fields, fd)
+			}
+		}
+	}
 }
 
 // FieldDefinition describes a field in a schema.
