@@ -11,7 +11,7 @@ func GeneratePackageJSON(cfg ProjectConfig) string {
 	// Trokky v2 ships the server, mail, i18n and all adapters in the single
 	// `trokky` package; adapters are enabled via side-effect imports.
 	deps := map[string]string{
-		"trokky":         "^2.0.0",
+		"@trokky/trokky": "^2.0.0",
 		"@trokky/client": "^2.0.0",
 		"express":        "^4.18.2",
 		"dotenv":         "^16.3.1",
@@ -54,9 +54,9 @@ func GeneratePackageJSON(cfg ProjectConfig) string {
 func GenerateServerTS(cfg ProjectConfig) string {
 	bt := "`"
 
-	dataAdapterImport := "import 'trokky/adapters/filesystem-data'"
+	dataAdapterImport := "import '@trokky/trokky/adapters/filesystem-data'"
 	if cfg.DataAdapter == DataPostgres {
-		dataAdapterImport = "import 'trokky/adapters/postgres-data'"
+		dataAdapterImport = "import '@trokky/trokky/adapters/postgres-data'"
 	}
 
 	// Studio is only mounted when the project embeds or proxies it.
@@ -90,9 +90,9 @@ func GenerateServerTS(cfg ProjectConfig) string {
  */
 
 import express, { type Express } from 'express'
-import { TrokkyExpress } from 'trokky/express'
+import { TrokkyExpress } from '@trokky/trokky/express'
 %s
-import 'trokky/adapters/filesystem-media'
+import '@trokky/trokky/adapters/filesystem-media'
 import trokkyConfig from './trokky.config.js'
 
 async function startServer() {
@@ -164,7 +164,7 @@ func GenerateTrokkyConfig(cfg ProjectConfig) string {
 		schemas = "[articleSchema, pageSchema] as ContentSchema[]"
 	}
 
-	// Mail is built into `trokky` v2: its adapters live under `trokky/mail/*`,
+	// Mail is built into `@trokky/trokky` v2: its adapters live under `@trokky/trokky/mail/*`,
 	// there are no separate @trokky/mail packages.
 	mailImport := ""
 	mailConsts := ""
@@ -179,9 +179,9 @@ const mailFromName = process.env.EMAIL_FROM_NAME || '%s'
       fromName: mailFromName,
       debug: true,
     })`
-		mailImport = "import { ConsoleMailAdapter } from 'trokky/mail/console'"
+		mailImport = "import { ConsoleMailAdapter } from '@trokky/trokky/mail/console'"
 		if cfg.Mail == MailResend {
-			mailImport = "import { ResendMailAdapter } from 'trokky/mail/resend'\nimport { ConsoleMailAdapter } from 'trokky/mail/console'"
+			mailImport = "import { ResendMailAdapter } from '@trokky/trokky/mail/resend'\nimport { ConsoleMailAdapter } from '@trokky/trokky/mail/console'"
 			adapter = `process.env.RESEND_API_KEY
       ? new ResendMailAdapter({
           apiKey: process.env.RESEND_API_KEY,
@@ -318,7 +318,7 @@ const mailFromName = process.env.EMAIL_FROM_NAME || '%s'
 
 import 'dotenv/config'
 
-import type { ContentSchema } from 'trokky'
+import type { ContentSchema } from '@trokky/trokky'
 %s
 %s
 %s
@@ -567,7 +567,7 @@ func GenerateExampleArticleSchema() string {
  * Article Schema - Example content type
  */
 
-import type { ContentSchema } from 'trokky'
+import type { ContentSchema } from '@trokky/trokky'
 
 export const articleSchema: ContentSchema = {
   name: 'article',
@@ -590,7 +590,7 @@ func GenerateExamplePageSchema() string {
  * Page Schema - Example content type
  */
 
-import type { ContentSchema } from 'trokky'
+import type { ContentSchema } from '@trokky/trokky'
 
 export const pageSchema: ContentSchema = {
   name: 'page',
@@ -621,4 +621,10 @@ export const schemas = [
   // Add your schemas here
 ]
 `
+}
+
+// GenerateNpmrc points the @trokky scope at GitHub Packages, where the 2.0.0
+// packages are published. The token comes from the environment, never the file.
+func GenerateNpmrc() string {
+	return "@trokky:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}\n"
 }

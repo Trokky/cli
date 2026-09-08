@@ -119,7 +119,7 @@ func TestScaffoldTemplates(t *testing.T) {
 
 			// (b) package.json pins the v2 packages
 			pkg := files["scaffold:package.json"]
-			if !strings.Contains(pkg, `"trokky": "^2.0.0"`) {
+			if !strings.Contains(pkg, `"@trokky/trokky": "^2.0.0"`) {
 				t.Errorf("package.json missing trokky ^2.0.0:\n%s", pkg)
 			}
 			if !strings.Contains(pkg, "@trokky/client") {
@@ -135,8 +135,8 @@ func TestScaffoldTemplates(t *testing.T) {
 			// (c) server.ts wiring
 			server := files["scaffold:server.ts"]
 			for _, want := range []string{
-				"from 'trokky/express'",
-				"import 'trokky/adapters/filesystem-media'",
+				"from '@trokky/trokky/express'",
+				"import '@trokky/trokky/adapters/filesystem-media'",
 				"TrokkyExpress.create(",
 				"trokky.mount(app",
 				"getMountedPaths()",
@@ -146,8 +146,8 @@ func TestScaffoldTemplates(t *testing.T) {
 				}
 			}
 
-			wantData := "import 'trokky/adapters/filesystem-data'"
-			unwantData := "import 'trokky/adapters/postgres-data'"
+			wantData := "import '@trokky/trokky/adapters/filesystem-data'"
+			unwantData := "import '@trokky/trokky/adapters/postgres-data'"
 			if cfg.DataAdapter == DataPostgres {
 				wantData, unwantData = unwantData, wantData
 			}
@@ -167,7 +167,7 @@ func TestScaffoldTemplates(t *testing.T) {
 
 			// trokky.config.ts uses the v2 type import
 			cfgFile := files["scaffold:trokky.config.ts"]
-			if !strings.Contains(cfgFile, "import type { ContentSchema } from 'trokky'") {
+			if !strings.Contains(cfgFile, "import type { ContentSchema } from '@trokky/trokky'") {
 				t.Errorf("trokky.config.ts missing ContentSchema import:\n%s", cfgFile)
 			}
 			if !strings.Contains(cfgFile, "as ContentSchema[]") {
@@ -177,9 +177,17 @@ func TestScaffoldTemplates(t *testing.T) {
 				t.Errorf("trokky.config.ts missing mail config:\n%s", cfgFile)
 			}
 
-			// (d) .npmrc is not part of a v2 scaffold
-			if _, ok := files["scaffold:.npmrc"]; ok {
-				t.Error(".npmrc was written to the scaffolded project")
+			// (d) .npmrc maps the @trokky scope to GitHub Packages and never embeds a token
+			npmrc, ok := files["scaffold:.npmrc"]
+			if !ok {
+				t.Error(".npmrc missing from the scaffolded project")
+			} else {
+				if !strings.Contains(npmrc, "@trokky:registry=https://npm.pkg.github.com") {
+					t.Errorf(".npmrc does not map the @trokky scope to GitHub Packages:\n%s", npmrc)
+				}
+				if !strings.Contains(npmrc, "${GITHUB_TOKEN}") || strings.Contains(npmrc, "ghp_") {
+					t.Errorf(".npmrc must reference the token via environment only:\n%s", npmrc)
+				}
 			}
 
 			// No d1/r2/s3 leftovers in generated env/config
@@ -208,8 +216,8 @@ func TestGeneratePackageJSONIsValidJSON(t *testing.T) {
 			if out.Name != cfg.Name {
 				t.Errorf("package.json name = %q, want %q", out.Name, cfg.Name)
 			}
-			if out.Dependencies["trokky"] != "^2.0.0" {
-				t.Errorf("dependencies.trokky = %q, want ^2.0.0", out.Dependencies["trokky"])
+			if out.Dependencies["@trokky/trokky"] != "^2.0.0" {
+				t.Errorf("dependencies.@trokky/trokky = %q, want ^2.0.0", out.Dependencies["@trokky/trokky"])
 			}
 			if out.Dependencies["@trokky/client"] != "^2.0.0" {
 				t.Errorf("dependencies[@trokky/client] = %q, want ^2.0.0", out.Dependencies["@trokky/client"])

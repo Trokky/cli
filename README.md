@@ -214,9 +214,9 @@ Templates: `minimal`, `full`, `api-only`
 The generated project depends on `trokky` ^2.0.0 and `@trokky/client`, plus
 `@trokky/studio` when Studio is enabled. Trokky v2 ships the server and every
 adapter in the single `trokky` package: the scaffold mounts
-`TrokkyExpress` from `trokky/express` and enables adapters through side-effect
-imports — `trokky/adapters/filesystem-data` or `trokky/adapters/postgres-data`
-for data, and `trokky/adapters/filesystem-media` for media.
+`TrokkyExpress` from `@trokky/trokky/express` and enables adapters through side-effect
+imports — `@trokky/trokky/adapters/filesystem-data` or `@trokky/trokky/adapters/postgres-data`
+for data, and `@trokky/trokky/adapters/filesystem-media` for media.
 
 ## Generate Types
 
