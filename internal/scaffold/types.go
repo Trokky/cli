@@ -17,7 +17,6 @@ type DataAdapter string
 const (
 	DataFilesystem DataAdapter = "filesystem"
 	DataPostgres   DataAdapter = "postgres"
-	DataD1         DataAdapter = "d1"
 )
 
 // MediaAdapter represents the media storage adapter.
@@ -25,8 +24,6 @@ type MediaAdapter string
 
 const (
 	MediaFilesystem MediaAdapter = "filesystem"
-	MediaR2         MediaAdapter = "r2"
-	MediaS3         MediaAdapter = "s3"
 )
 
 // MailProvider represents the mail provider.
@@ -92,14 +89,14 @@ type ProjectConfig struct {
 // Validate checks that all config values are valid.
 func (cfg ProjectConfig) Validate() error {
 	switch cfg.DataAdapter {
-	case DataFilesystem, DataPostgres, DataD1:
+	case DataFilesystem, DataPostgres:
 	default:
-		return fmt.Errorf("invalid data adapter %q (valid: filesystem, postgres, d1)", cfg.DataAdapter)
+		return fmt.Errorf("invalid data adapter %q (valid: filesystem, postgres)", cfg.DataAdapter)
 	}
 	switch cfg.MediaAdapter {
-	case MediaFilesystem, MediaR2, MediaS3:
+	case MediaFilesystem:
 	default:
-		return fmt.Errorf("invalid media adapter %q (valid: filesystem, r2, s3)", cfg.MediaAdapter)
+		return fmt.Errorf("invalid media adapter %q (valid: filesystem)", cfg.MediaAdapter)
 	}
 	switch cfg.Mail {
 	case MailNone, MailResend, MailConsole:
@@ -145,7 +142,7 @@ var TemplateDefaults = map[Template]ProjectConfig{
 	TemplateFull: {
 		Template:        TemplateFull,
 		DataAdapter:     DataPostgres,
-		MediaAdapter:    MediaS3,
+		MediaAdapter:    MediaFilesystem,
 		Mail:            MailResend,
 		Auth:            AuthOAuth,
 		Studio:          StudioEmbedded,

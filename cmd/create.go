@@ -24,7 +24,7 @@ Examples:
   trokky create my-site
   trokky create my-site --template full
   trokky create my-site --template minimal -y
-  trokky create my-site --data postgres --media s3 --mail resend`,
+  trokky create my-site --data postgres --media filesystem --mail resend`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
@@ -154,7 +154,7 @@ func promptTemplate(reader *bufio.Reader) (scaffold.Template, error) {
 	fmt.Println("  Select a template:")
 	fmt.Println()
 	fmt.Println("    1) minimal  - Filesystem storage, basic auth, embedded studio")
-	fmt.Println("    2) full     - Postgres, S3, OAuth, mail, captcha, i18n, examples")
+	fmt.Println("    2) full     - Postgres, OAuth, mail, captcha, i18n, examples")
 	fmt.Println("    3) api-only - Filesystem storage, basic auth, no studio")
 	fmt.Println()
 	fmt.Print("  Template [1]: ")
@@ -181,7 +181,7 @@ func promptCustomize(reader *bufio.Reader, cfg *scaffold.ProjectConfig) error {
 
 	// Data adapter
 	fmt.Println("  Data adapter:")
-	fmt.Println("    1) filesystem  2) postgres  3) d1")
+	fmt.Println("    1) filesystem  2) postgres")
 	fmt.Printf("  Choice [%s]: ", dataAdapterIndex(cfg.DataAdapter))
 	input, _ := reader.ReadString('\n')
 	input = strings.TrimSpace(input)
@@ -191,8 +191,6 @@ func promptCustomize(reader *bufio.Reader, cfg *scaffold.ProjectConfig) error {
 			cfg.DataAdapter = scaffold.DataFilesystem
 		case "2", "postgres":
 			cfg.DataAdapter = scaffold.DataPostgres
-		case "3", "d1":
-			cfg.DataAdapter = scaffold.DataD1
 		default:
 			return fmt.Errorf("invalid data adapter choice: %q", input)
 		}
@@ -200,7 +198,7 @@ func promptCustomize(reader *bufio.Reader, cfg *scaffold.ProjectConfig) error {
 
 	// Media adapter
 	fmt.Println("  Media adapter:")
-	fmt.Println("    1) filesystem  2) r2  3) s3")
+	fmt.Println("    1) filesystem")
 	fmt.Printf("  Choice [%s]: ", mediaAdapterIndex(cfg.MediaAdapter))
 	input, _ = reader.ReadString('\n')
 	input = strings.TrimSpace(input)
@@ -208,10 +206,6 @@ func promptCustomize(reader *bufio.Reader, cfg *scaffold.ProjectConfig) error {
 		switch input {
 		case "1", "filesystem":
 			cfg.MediaAdapter = scaffold.MediaFilesystem
-		case "2", "r2":
-			cfg.MediaAdapter = scaffold.MediaR2
-		case "3", "s3":
-			cfg.MediaAdapter = scaffold.MediaS3
 		default:
 			return fmt.Errorf("invalid media adapter choice: %q", input)
 		}
@@ -364,8 +358,6 @@ func dataAdapterIndex(v scaffold.DataAdapter) string {
 		return "1"
 	case scaffold.DataPostgres:
 		return "2"
-	case scaffold.DataD1:
-		return "3"
 	}
 	return "1"
 }
@@ -374,10 +366,6 @@ func mediaAdapterIndex(v scaffold.MediaAdapter) string {
 	switch v {
 	case scaffold.MediaFilesystem:
 		return "1"
-	case scaffold.MediaR2:
-		return "2"
-	case scaffold.MediaS3:
-		return "3"
 	}
 	return "1"
 }
@@ -446,8 +434,8 @@ func i18nIndex(v scaffold.I18nMode) string {
 
 func init() {
 	createCmd.Flags().StringP("template", "t", "", "Project template (minimal, full, api-only)")
-	createCmd.Flags().String("data", "", "Data adapter (filesystem, postgres, d1)")
-	createCmd.Flags().String("media", "", "Media adapter (filesystem, r2, s3)")
+	createCmd.Flags().String("data", "", "Data adapter (filesystem, postgres)")
+	createCmd.Flags().String("media", "", "Media adapter (filesystem)")
 	createCmd.Flags().String("mail", "", "Mail provider (none, resend, console)")
 	createCmd.Flags().String("auth", "", "Auth mode (basic, oauth, none)")
 	createCmd.Flags().String("studio", "", "Studio mode (embedded, separate, none)")

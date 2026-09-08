@@ -8,51 +8,24 @@ import (
 
 // GeneratePackageJSON generates package.json based on project config.
 func GeneratePackageJSON(cfg ProjectConfig) string {
+	// Trokky v2 ships the server, mail, i18n and all adapters in the single
+	// `trokky` package; adapters are enabled via side-effect imports.
 	deps := map[string]string{
-		"@trokky/express": "^0.1.14",
-		"@trokky/core":    "^0.1.14",
-		"@trokky/types":   "^0.1.0",
-		"express":         "^4.18.2",
-		"dotenv":          "^16.3.1",
+		"trokky":         "^2.0.0",
+		"@trokky/client": "^2.0.0",
+		"express":        "^4.18.2",
+		"dotenv":         "^16.3.1",
+		"sharp":          "^0.33.0",
 	}
 
-	switch cfg.DataAdapter {
-	case DataFilesystem:
-		deps["@trokky/adapter-filesystem-data"] = "^0.1.1"
-	case DataPostgres:
-		deps["@trokky/adapter-postgres-data"] = "^0.1.9"
-	case DataD1:
-		deps["@trokky/adapter-cloudflare-d1"] = "^0.1.0"
+	if cfg.DataAdapter == DataPostgres {
+		// Declared as an optional dependency of `trokky` for postgres-data.
+		deps["pg"] = "^8.11.3"
 	}
 
-	switch cfg.MediaAdapter {
-	case MediaFilesystem:
-		deps["@trokky/adapter-filesystem-media"] = "^0.1.2"
-	case MediaR2:
-		deps["@trokky/adapter-cloudflare-r2"] = "^0.1.0"
-	case MediaS3:
-		deps["@trokky/adapter-s3"] = "^0.1.0"
+	if cfg.Studio != StudioNone {
+		deps["@trokky/studio"] = "^2.0.0"
 	}
-
-	switch cfg.Mail {
-	case MailResend:
-		deps["@trokky/mail"] = "^0.1.3"
-		deps["@trokky/mail-adapter-resend"] = "^0.1.0"
-		deps["@trokky/mail-adapter-console"] = "^0.1.0"
-	case MailConsole:
-		deps["@trokky/mail"] = "^0.1.3"
-		deps["@trokky/mail-adapter-console"] = "^0.1.0"
-	}
-
-	if cfg.Studio == StudioEmbedded || cfg.Studio == StudioSeparate {
-		deps["@trokky/studio"] = "^0.1.14"
-	}
-
-	if cfg.I18n != I18nNone {
-		deps["@trokky/i18n"] = "^0.1.2"
-	}
-
-	deps["sharp"] = "^0.33.0"
 
 	pkg := map[string]interface{}{
 		"name":    cfg.Name,
@@ -79,118 +52,154 @@ func GeneratePackageJSON(cfg ProjectConfig) string {
 
 // GenerateServerTS generates the server.ts entry point.
 func GenerateServerTS(cfg ProjectConfig) string {
-	var imports []string
-	imports = append(imports, "import dotenv from 'dotenv'")
-	imports = append(imports, "dotenv.config()")
-	imports = append(imports, "")
+	bt := "`"
 
-	switch cfg.DataAdapter {
-	case DataFilesystem:
-		imports = append(imports, "import '@trokky/adapter-filesystem-data'")
-	case DataPostgres:
-		imports = append(imports, "import '@trokky/adapter-postgres-data'")
-	case DataD1:
-		imports = append(imports, "import '@trokky/adapter-cloudflare-d1'")
+	dataAdapterImport := "import 'trokky/adapters/filesystem-data'"
+	if cfg.DataAdapter == DataPostgres {
+		dataAdapterImport = "import 'trokky/adapters/postgres-data'"
 	}
 
-	switch cfg.MediaAdapter {
-	case MediaFilesystem:
-		imports = append(imports, "import '@trokky/adapter-filesystem-media'")
-	case MediaR2:
-		imports = append(imports, "import '@trokky/adapter-cloudflare-r2'")
-	case MediaS3:
-		imports = append(imports, "import '@trokky/adapter-s3'")
-	}
-
-	imports = append(imports, "")
-	imports = append(imports, "import { startServer } from '@trokky/express'")
-	imports = append(imports, "import config from './trokky.config.js'")
-
-	studioLine := ""
+	// Studio is only mounted when the project embeds or proxies it.
+	studioMount := ""
+	studioLog := ""
 	if cfg.Studio != StudioNone {
-		studioLine = fmt.Sprintf("\n  Studio: http://localhost:${info.port}${info.studioPath}")
+		studioMount = "\n      studioPath: '/studio',"
+		studioLog = fmt.Sprintf("\n      console.log(%sStudio: http://localhost:${port}${paths.studioPath}%s)", bt, bt)
 	}
 
-	return fmt.Sprintf(`/**
+	// Optional config sections are only forwarded when trokky.config.ts declares
+	// them, so the object literal always matches TrokkyConfig.
+	extraOptions := "\n\n      // OAuth2 authorization server\n      oauth2: trokkyConfig.oauth2,"
+	if cfg.Auth == AuthOAuth {
+		extraOptions += "\n\n      // OAuth providers\n      oauth: trokkyConfig.oauth,"
+	}
+	if cfg.Captcha != CaptchaNone {
+		extraOptions += "\n\n      // CAPTCHA verification\n      captcha: trokkyConfig.captcha,"
+	}
+	if cfg.I18n != I18nNone {
+		extraOptions += "\n\n      // Internationalization\n      i18n: trokkyConfig.i18n,"
+	}
+	if cfg.Mail != MailNone {
+		extraOptions += "\n\n      // Transactional email\n      mail: trokkyConfig.mail,"
+	}
+
+	return fmt.Sprintf(`import 'dotenv/config'
+
+/**
  * %s - Trokky CMS Server
  */
 
+import express, { type Express } from 'express'
+import { TrokkyExpress } from 'trokky/express'
 %s
+import 'trokky/adapters/filesystem-media'
+import trokkyConfig from './trokky.config.js'
 
-const server = await startServer(config)
+async function startServer() {
+  const app: Express = express()
+  const port: number = Number(process.env.PORT) || 3000
 
-const info = server.getInfo()
-console.log(`+"`"+`
-%s running
-  API: http://localhost:${info.port}${info.apiPath}%s
-`+"`"+`)
-`, cfg.Name, strings.Join(imports, "\n"), cfg.Name, studioLine)
+  try {
+    const trokky = await TrokkyExpress.create({
+      // Content schemas
+      schemas: trokkyConfig.schemas,
+
+      // Split storage adapters (data + media)
+      storage: trokkyConfig.storage,
+
+      // Media processing and upload rules
+      media: trokkyConfig.media,
+
+      // Authentication and security
+      security: trokkyConfig.security,
+
+      // HTTP server options
+      server: trokkyConfig.server,
+
+      // Studio integration
+      studio: trokkyConfig.studio,%s
+    })
+
+    trokky.mount(app, {
+      apiPath: '/api',%s
+    })
+
+    const paths = trokky.getMountedPaths()
+
+    app.get('/health', (_req, res) => {
+      res.json({
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        mountedPaths: paths,
+      })
+    })
+
+    app.listen(port, () => {
+      console.log(%s\n%s running%s)
+      console.log(%sServer: http://localhost:${port}%s)
+      console.log(%sAPI: http://localhost:${port}${paths.apiPath}%s)%s
+      console.log(%sHealth: http://localhost:${port}/health\n%s)
+    })
+  } catch (error) {
+    console.error('Failed to start %s:', error)
+    process.exit(1)
+  }
+}
+
+startServer().catch(error => {
+  console.error('Server startup failed:', error)
+  process.exit(1)
+})
+`, cfg.Name, dataAdapterImport, extraOptions, studioMount,
+		bt, cfg.Name, bt, bt, bt, bt, bt, studioLog, bt, bt, cfg.Name)
 }
 
 // GenerateTrokkyConfig generates the trokky.config.ts file.
 func GenerateTrokkyConfig(cfg ProjectConfig) string {
 	// Schema imports
 	schemaImports := "// import { yourSchema } from './schemas/your-schema.js'"
-	schemas := "[\n    // Add your schemas here\n  ]"
+	schemas := "[\n    // Add your schemas here\n  ] as ContentSchema[]"
 	if cfg.IncludeExamples {
 		schemaImports = "import { articleSchema } from './schemas/article.js'\nimport { pageSchema } from './schemas/page.js'"
-		schemas = "[articleSchema, pageSchema]"
+		schemas = "[articleSchema, pageSchema] as ContentSchema[]"
 	}
 
-	// Mail imports and function
+	// Mail is built into `trokky` v2: its adapters live under `trokky/mail/*`,
+	// there are no separate @trokky/mail packages.
 	mailImport := ""
-	mailFunction := ""
+	mailConsts := ""
 	mailConfig := ""
-	if cfg.Mail == MailResend {
-		mailImport = "import { ResendMailAdapter } from '@trokky/mail-adapter-resend'\nimport { ConsoleMailAdapter } from '@trokky/mail-adapter-console'"
-		mailFunction = `
-function getMailConfig() {
-  const enabled = process.env.TROKKY_MAIL_ENABLED === 'true'
-  const provider = process.env.TROKKY_MAIL_PROVIDER || 'console'
-  if (!enabled) return undefined
-
-  const emailFrom = process.env.EMAIL_FROM || 'noreply@example.com'
-  const emailFromName = process.env.EMAIL_FROM_NAME || 'My App'
-
-  if (provider === 'resend' && process.env.RESEND_API_KEY) {
-    return {
-      adapter: new ResendMailAdapter({
-        apiKey: process.env.RESEND_API_KEY,
-        from: emailFrom,
-        fromName: emailFromName,
-        debug: process.env.NODE_ENV === 'development',
-      }),
-      defaultFrom: emailFrom,
-      defaultFromName: emailFromName,
-    }
-  }
-
-  return {
-    adapter: new ConsoleMailAdapter({ from: emailFrom, fromName: emailFromName, debug: true }),
-    defaultFrom: emailFrom,
-    defaultFromName: emailFromName,
-  }
-}
-`
-		mailConfig = "\n  mail: getMailConfig(),"
-	} else if cfg.Mail == MailConsole {
-		mailImport = "import { ConsoleMailAdapter } from '@trokky/mail-adapter-console'"
-		mailFunction = `
-function getMailConfig() {
-  const enabled = process.env.TROKKY_MAIL_ENABLED === 'true'
-  if (!enabled) return undefined
-
-  const emailFrom = process.env.EMAIL_FROM || 'noreply@example.com'
-  const emailFromName = process.env.EMAIL_FROM_NAME || 'My App'
-
-  return {
-    adapter: new ConsoleMailAdapter({ from: emailFrom, fromName: emailFromName, debug: true }),
-    defaultFrom: emailFrom,
-    defaultFromName: emailFromName,
-  }
-}
-`
-		mailConfig = "\n  mail: getMailConfig(),"
+	if cfg.Mail != MailNone {
+		mailConsts = fmt.Sprintf(`
+const mailFrom = process.env.EMAIL_FROM || 'noreply@example.com'
+const mailFromName = process.env.EMAIL_FROM_NAME || '%s'
+`, cfg.Name)
+		adapter := `new ConsoleMailAdapter({
+      from: mailFrom,
+      fromName: mailFromName,
+      debug: true,
+    })`
+		mailImport = "import { ConsoleMailAdapter } from 'trokky/mail/console'"
+		if cfg.Mail == MailResend {
+			mailImport = "import { ResendMailAdapter } from 'trokky/mail/resend'\nimport { ConsoleMailAdapter } from 'trokky/mail/console'"
+			adapter = `process.env.RESEND_API_KEY
+      ? new ResendMailAdapter({
+          apiKey: process.env.RESEND_API_KEY,
+          from: mailFrom,
+          fromName: mailFromName,
+        })
+      : new ConsoleMailAdapter({
+          from: mailFrom,
+          fromName: mailFromName,
+          debug: true,
+        })`
+		}
+		mailConfig = fmt.Sprintf(`
+  mail: process.env.TROKKY_MAIL_ENABLED === 'true' ? {
+    adapter: %s,
+    defaultFrom: mailFrom,
+    defaultFromName: mailFromName,
+  } : undefined,`, adapter)
 	}
 
 	// Data config
@@ -214,45 +223,16 @@ function getMailConfig() {
         tablePrefix: 'trokky_',
       },
     }`
-	case DataD1:
-		dataConfig = `{
-      adapter: 'cloudflare-d1' as const,
-      options: {
-        databaseName: process.env.D1_DATABASE_NAME,
-      },
-    }`
 	}
 
 	// Media config
-	var mediaConfig string
-	switch cfg.MediaAdapter {
-	case MediaFilesystem:
-		mediaConfig = `{
+	mediaConfig := `{
       adapter: 'filesystem-media' as const,
       options: {
         mediaDir: './data/media',
         createDirs: true,
       },
     }`
-	case MediaR2:
-		mediaConfig = `{
-      adapter: 'cloudflare-r2' as const,
-      options: {
-        bucketName: process.env.R2_BUCKET_NAME,
-        accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
-        accessKeyId: process.env.R2_ACCESS_KEY_ID,
-        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
-      },
-    }`
-	case MediaS3:
-		mediaConfig = `{
-      adapter: 's3' as const,
-      options: {
-        bucket: process.env.S3_BUCKET,
-        region: process.env.AWS_REGION,
-      },
-    }`
-	}
 
 	// Captcha config
 	captchaConfig := ""
@@ -336,9 +316,9 @@ function getMailConfig() {
  * Trokky Configuration
  */
 
-import dotenv from 'dotenv'
-dotenv.config()
+import 'dotenv/config'
 
+import type { ContentSchema } from 'trokky'
 %s
 %s
 %s
@@ -382,8 +362,19 @@ export default {
       enabled: true,
       rpId: process.env.PASSKEY_RP_ID,
       rpName: process.env.PASSKEY_RP_NAME || '%s',
-      origin: process.env.PASSKEY_ORIGIN || ` + "`" + `http://${process.env.PASSKEY_RP_ID}:3000` + "`" + `,
+      origin: process.env.PASSKEY_ORIGIN || `+"`"+`http://${process.env.PASSKEY_RP_ID}:3000`+"`"+`,
     } : undefined,
+  },
+
+  server: {
+    basePath: '',
+    port: Number(process.env.PORT) || 3000,
+    cors: {
+      origin: true,
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    },
   },
 
   oauth2: {
@@ -391,7 +382,7 @@ export default {
     issuer: process.env.OAUTH2_ISSUER || 'http://localhost:3000',
   },%s%s%s%s%s
 }
-`, schemaImports, mailImport, structureImport, mailFunction, schemas,
+`, schemaImports, mailImport, structureImport, mailConsts, schemas,
 		dataConfig, mediaConfig, cfg.Name,
 		oauthConfig, mailConfig, captchaConfig, studioConfig, i18nConfig)
 }
@@ -421,25 +412,6 @@ func GenerateEnvExample(cfg ProjectConfig) string {
 	if cfg.DataAdapter == DataPostgres {
 		lines = append(lines, "", "# Database", "DATABASE_URL=postgres://user:password@localhost:5432/trokky")
 	}
-	if cfg.DataAdapter == DataD1 {
-		lines = append(lines, "", "# Cloudflare D1", "D1_DATABASE_NAME=your-d1-database")
-	}
-
-	if cfg.MediaAdapter == MediaR2 {
-		lines = append(lines, "", "# Cloudflare R2",
-			"CLOUDFLARE_ACCOUNT_ID=your-account-id",
-			"R2_BUCKET_NAME=your-bucket",
-			"R2_ACCESS_KEY_ID=your-access-key",
-			"R2_SECRET_ACCESS_KEY=your-secret-key")
-	}
-	if cfg.MediaAdapter == MediaS3 {
-		lines = append(lines, "", "# AWS S3",
-			"AWS_REGION=us-east-1",
-			"S3_BUCKET=your-bucket",
-			"AWS_ACCESS_KEY_ID=your-access-key",
-			"AWS_SECRET_ACCESS_KEY=your-secret-key")
-	}
-
 	if cfg.Mail != MailNone {
 		lines = append(lines, "", "# Email",
 			"TROKKY_MAIL_ENABLED=true",
@@ -481,19 +453,19 @@ func GenerateEnvExample(cfg ProjectConfig) string {
 func GenerateTsConfig() string {
 	cfg := map[string]interface{}{
 		"compilerOptions": map[string]interface{}{
-			"target":                         "ES2022",
-			"module":                         "NodeNext",
-			"moduleResolution":               "NodeNext",
-			"lib":                            []string{"ES2022"},
-			"outDir":                         "./dist",
-			"rootDir":                        ".",
-			"strict":                         true,
-			"esModuleInterop":                true,
-			"skipLibCheck":                   true,
+			"target":                           "ES2022",
+			"module":                           "NodeNext",
+			"moduleResolution":                 "NodeNext",
+			"lib":                              []string{"ES2022"},
+			"outDir":                           "./dist",
+			"rootDir":                          ".",
+			"strict":                           true,
+			"esModuleInterop":                  true,
+			"skipLibCheck":                     true,
 			"forceConsistentCasingInFileNames": true,
-			"resolveJsonModule":              true,
-			"declaration":                    true,
-			"declarationMap":                 true,
+			"resolveJsonModule":                true,
+			"declaration":                      true,
+			"declarationMap":                   true,
 		},
 		"include": []string{"*.ts", "schemas/**/*"},
 		"exclude": []string{"node_modules", "dist"},
@@ -542,13 +514,6 @@ npm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
-`
-}
-
-// GenerateNpmrc generates .npmrc for GitHub Packages.
-func GenerateNpmrc() string {
-	return `@trokky:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
 `
 }
 
@@ -602,7 +567,7 @@ func GenerateExampleArticleSchema() string {
  * Article Schema - Example content type
  */
 
-import type { ContentSchema } from '@trokky/types'
+import type { ContentSchema } from 'trokky'
 
 export const articleSchema: ContentSchema = {
   name: 'article',
@@ -625,7 +590,7 @@ func GenerateExamplePageSchema() string {
  * Page Schema - Example content type
  */
 
-import type { ContentSchema } from '@trokky/types'
+import type { ContentSchema } from 'trokky'
 
 export const pageSchema: ContentSchema = {
   name: 'page',
