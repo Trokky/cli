@@ -2,6 +2,8 @@
 
 Command-line tool for managing [Trokky CMS](https://github.com/Trokky/trokky) instances.
 
+This is the only official Trokky CLI — the former TypeScript CLI shipped inside `@trokky/client` is retired. It targets Trokky v2 servers.
+
 ## Install
 
 **macOS (Homebrew):**
@@ -69,7 +71,9 @@ trokky create my-site
 
 ## Authentication
 
-Trokky CLI supports three ways to provide credentials (in priority order):
+Trokky CLI supports three ways to provide credentials (in priority order). The
+`--url` value points at the API mount (`/api` by default), not the site root;
+`trokky login` takes the instance URL and resolves the mount for you.
 
 **1. CLI flags:**
 
@@ -107,6 +111,17 @@ Configuration is stored in `~/.trokky/config.yaml`.
 # List with filtering and pagination
 trokky docs list posts --limit 10 --status published --sort _createdAt --order desc
 
+# Pagination: --offset or 1-based --page (both combine with --limit)
+trokky docs list posts --limit 10 --page 2
+trokky docs list posts --limit 10 --offset 20
+
+# Full-text search and JSON filters
+trokky docs list posts --search hello
+trokky docs list posts --filter '{"featured":true}'
+
+# Count only
+trokky docs list posts --count
+
 # Different output formats
 trokky docs list posts --format table
 trokky docs list posts --format ids-only -q  # clean for piping
@@ -126,6 +141,28 @@ trokky docs update posts post-123 --data '{"title": "New Title"}'
 # Delete (with confirmation)
 trokky docs delete posts post-123 post-456 --force
 ```
+
+### `documents list` flags
+
+`documents list` sends the v2 server's native query format. Sorting uses prefix
+notation: `--sort _createdAt --order desc` is sent as `sort=-_createdAt`, and
+`--order asc` (the default) as `sort=_createdAt`. A value already written
+directionally — `--sort -_createdAt` or `--sort _createdAt.desc` — is passed
+through unchanged.
+
+| Flag | Description |
+|------|-------------|
+| `--limit <n>` | Maximum documents to return (default 20) |
+| `--offset <n>` | Number of documents to skip |
+| `--page <n>` | 1-based page number, used with `--limit` |
+| `--search <query>` | Full-text search query |
+| `--filter <json>` | JSON filter conditions |
+| `--sort <field>` | Field to sort by |
+| `--order asc\|desc` | Sort direction applied to `--sort` (default `asc`) |
+| `--status <status>` | Filter by status (`published` or `draft`); folded into `--filter` as `_status` |
+| `--expand <fields>` | Expand reference fields |
+| `--format json\|table\|ids-only` | Output format (default `json`) |
+| `--count` | Print the total document count only |
 
 ## Backup & Restore
 
@@ -156,16 +193,68 @@ trokky create my-site
 trokky create my-site --template full --examples -y
 
 # Customize adapters
-trokky create my-site --template minimal --data postgres --media s3 --mail resend
+trokky create my-site --template minimal --data postgres --media filesystem --mail resend
 ```
 
 Templates: `minimal`, `full`, `api-only`
+
+| Flag | Values |
+|------|--------|
+| `-t, --template` | `minimal`, `full`, `api-only` |
+| `--data` | `filesystem`, `postgres` |
+| `--media` | `filesystem` |
+| `--mail` | `none`, `resend`, `console` |
+| `--auth` | `basic`, `oauth`, `none` |
+| `--studio` | `embedded`, `separate`, `none` |
+| `--captcha` | `none`, `turnstile`, `recaptcha` |
+| `--i18n` | `none`, `en`, `fr`, `en-fr` |
+| `--examples` | Include example schemas |
+| `-y, --yes` | Skip prompts, use defaults |
+
+The generated project depends on `trokky` ^2.0.0 and `@trokky/client`, plus
+`@trokky/studio` when Studio is enabled. Trokky v2 ships the server and every
+adapter in the single `trokky` package: the scaffold mounts
+`TrokkyExpress` from `trokky/express` and enables adapters through side-effect
+imports — `trokky/adapters/filesystem-data` or `trokky/adapters/postgres-data`
+for data, and `trokky/adapters/filesystem-media` for media.
+
+## Generate Types
+
+```bash
+trokky generate-types -o ./src/types/trokky
+```
+
+Fetches `GET /collections`, then `GET /schemas/<name>` for each collection, and
+writes a single self-contained `index.ts` to the output directory (default
+`./src/types/trokky`). Both endpoints are authenticated, so credentials are
+required — via `trokky login`, a stored config, or `--url`/`--token`.
+
+The generated file imports nothing and contains `BaseDocument` (`_id`, `_type`,
+`_createdAt`, `_updatedAt`, `_version`, `_status`), `MediaFieldValue`,
+`Reference<T>`, and one `<Name>Document` interface per collection — with nested
+interfaces for object fields, unions for references, and `unknown` for custom
+field types. It ends with `DocumentType`, `AnyDocument`, `DocumentTypeMap` and
+`DocumentOf<T>`.
+
+```ts
+export interface PostDocument extends BaseDocument {
+  _type: 'post'
+  title: string
+  slug?: string
+  cover?: MediaFieldValue | null
+  author?: Reference<'author'> | AuthorDocument
+  tags?: string[]
+}
+
+export type DocumentType = 'post' | 'author'
+export type DocumentOf<T extends DocumentType> = DocumentTypeMap[T]
+```
 
 ## Global Flags
 
 | Flag | Description |
 |------|-------------|
-| `--url <url>` | Trokky instance URL |
+| `--url <url>` | Trokky API mount, e.g. `https://cms.example.com/api` |
 | `--token <token>` | API token |
 | `--instance <name>` | Use a specific configured instance |
 | `-q, --quiet` | Suppress informational output |
