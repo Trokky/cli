@@ -44,6 +44,9 @@ type Result struct {
 	// collected before any file is written, so their messages quote the
 	// original specifiers.
 	Warnings []Warning
+	// Scan records what the singleton check examined, so a clean result can be
+	// told apart from one where nothing was found to check.
+	Scan ScanSummary
 }
 
 // Kinds of FileChange.
@@ -60,11 +63,12 @@ func Run(opts Options) (*Result, error) {
 
 	// Scan for warnings first: once files are rewritten the sources no longer
 	// mention the old specifiers the messages point at.
-	warnings, err := ScanWarnings(opts.Root)
+	warnings, scan, err := ScanWarningsSummary(opts.Root)
 	if err != nil {
 		return nil, err
 	}
 	res.Warnings = warnings
+	res.Scan = scan
 
 	err = filepath.WalkDir(opts.Root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -171,6 +175,17 @@ func (r *Result) Report(w io.Writer, dryRun bool) {
 			fmt.Fprintf(tw, "  %s\t-> %s\t%d\n", m.From, m.To, r.Hits[m.From])
 		}
 		_ = tw.Flush()
+	}
+
+	// Always say what was examined. "No warnings" on its own cannot be told apart from
+	// "no structure file was recognised, so nothing was checked", and the second case is
+	// the one that loses documents on restore.
+	fmt.Fprintf(w, "Singleton check: %d entr%s across %d structure file(s), against %d schema file(s).\n",
+		r.Scan.SingletonEntries, map[bool]string{true: "y", false: "ies"}[r.Scan.SingletonEntries == 1],
+		r.Scan.StructureFiles, r.Scan.SchemaFiles)
+	if r.Scan.SingletonEntries == 0 {
+		fmt.Fprintln(w, "  No singleton entries were found. If this project has singletons, the structure")
+		fmt.Fprintln(w, "  file was not recognised and the check did NOT run — verify before restoring.")
 	}
 
 	if len(r.Warnings) == 0 {

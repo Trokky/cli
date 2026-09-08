@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -65,6 +66,15 @@ func RewritePackageJSON(src []byte) (out []byte, changes []string, err error) {
 		return nil, nil, err
 	}
 
+	// The section scan is line-based, so a dependency block written on a single line
+	// (or otherwise compacted) matches nothing. Left alone that returns the file
+	// byte-identical with no error: the sources get rewritten, the manifest keeps asking
+	// for packages that no longer exist, and the next install fails on the deploy host.
+	// Cross-check against the parsed JSON and refuse rather than silently do nothing.
+	if err := verifySectionsSeen(src, lines, sections); err != nil {
+		return nil, nil, err
+	}
+
 	// Nothing to do unless some section mentions a @trokky package.
 	any, hasTrokky := false, false
 	removals := map[string]bool{}
@@ -81,8 +91,11 @@ func RewritePackageJSON(src []byte) (out []byte, changes []string, err error) {
 			}
 		}
 	}
+	changes = append(changes, pinNotes(src)...)
+
 	if !any {
-		return src, nil, nil
+		// Stale pins still have to reach the report even when no dependency changed.
+		return src, changes, nil
 	}
 
 	// @trokky/trokky replaces the packages we remove, so it is only added
@@ -247,4 +260,87 @@ func rewriteSection(lines []string, s section, addTrokky bool) ([]string, []stri
 	}
 
 	return append(append([]string{lines[s.start]}, body...), lines[s.end]), changes
+}
+
+// pinSections are the blocks npm, yarn and pnpm use to force a version. The codemod does
+// not rewrite them (their semantics differ per package manager), but a stale pin on a
+// package that no longer exists breaks installs, so it must not pass unmentioned.
+var pinSections = []string{"resolutions", "overrides"}
+
+// verifySectionsSeen reports an error when the parsed JSON holds @trokky entries in a
+// dependency section that the line scanner did not pick up.
+func verifySectionsSeen(src []byte, lines []string, sections []section) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(src, &raw); err != nil {
+		return nil // not an object; the caller already validated it parses
+	}
+
+	seen := map[string]int{}
+	for _, s := range sections {
+		for _, e := range collectEntries(lines, s) {
+			if strings.HasPrefix(e.key, "@trokky/") {
+				seen[s.name]++
+			}
+		}
+	}
+
+	for _, name := range depSections {
+		blob, ok := raw[name]
+		if !ok {
+			continue
+		}
+		var deps map[string]string
+		if json.Unmarshal(blob, &deps) != nil {
+			continue
+		}
+		count := 0
+		for key := range deps {
+			if strings.HasPrefix(key, "@trokky/") {
+				count++
+			}
+		}
+		if count > seen[name] {
+			return fmt.Errorf(
+				"%q holds %d @trokky dependencies but only %d could be read: this package.json is not "+
+					"formatted one entry per line, so it cannot be rewritten safely — reformat it "+
+					"(npm pkg fix, or a JSON formatter) and run again",
+				name, count, seen[name])
+		}
+	}
+	return nil
+}
+
+// pinNotes returns a note for every stale @trokky pin in resolutions/overrides, which the
+// codemod deliberately does not rewrite.
+func pinNotes(src []byte) []string {
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(src, &raw) != nil {
+		return nil
+	}
+	var notes []string
+	for _, name := range pinSections {
+		blob, ok := raw[name]
+		if !ok {
+			continue
+		}
+		var pins map[string]json.RawMessage
+		if json.Unmarshal(blob, &pins) != nil {
+			continue
+		}
+		for _, key := range sortedKeys(pins) {
+			if isOldPackage(key) {
+				notes = append(notes, name+" still pins "+key+" (not rewritten, edit by hand)")
+			}
+		}
+	}
+	return notes
+}
+
+func sortedKeys(m map[string]json.RawMessage) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

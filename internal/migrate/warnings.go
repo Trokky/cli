@@ -461,9 +461,20 @@ var warnStructureFiles = map[string]bool{
 	"trokky.config.mjs": true,
 }
 
-// warnIsStructureFile reports whether base names a file that may hold the
-// structure definition.
-func warnIsStructureFile(base string) bool { return warnStructureFiles[base] }
+// warnIsStructureFile reports whether a file may hold the structure definition.
+//
+// The conventional basenames are matched first, but a project is free to split a long
+// structure across a directory (structure/index.ts, structure/pages.ts) or to build it
+// somewhere else entirely. Missing one of those files means the singleton check silently
+// examines nothing and reports "no warnings", which is indistinguishable from a clean
+// project and is exactly the case that loses documents on restore. So any source file
+// that actually contains a singleton entry counts, wherever it lives.
+func warnIsStructureFile(base, src string) bool {
+	if warnStructureFiles[base] {
+		return true
+	}
+	return strings.Contains(src, `type: 'singleton'`) || strings.Contains(src, `type: "singleton"`)
+}
 
 // warnIsSchemaFile reports whether a file holds document schemas: anything
 // under a schemas/ or schema/ directory, a schemas.ts/schemas.js, or any file
@@ -488,7 +499,22 @@ func warnIsSchemaFile(rel, src string) bool {
 // ScanWarnings walks root and returns every warning found, sorted by file and
 // line. Skipped directories (node_modules, .git, dist, build, .astro) and
 // symlinks are not visited.
+// ScanSummary records what the singleton check actually examined, so that a clean run can
+// be told apart from a run that found nothing to look at. Reporting only "no warnings" makes
+// those two identical, and the second one loses documents on restore.
+type ScanSummary struct {
+	StructureFiles   int
+	SchemaFiles      int
+	SingletonEntries int
+}
+
+// ScanWarnings walks root and returns every warning found.
 func ScanWarnings(root string) ([]Warning, error) {
+	w, _, err := ScanWarningsSummary(root)
+	return w, err
+}
+
+func ScanWarningsSummary(root string) ([]Warning, ScanSummary, error) {
 	astro := IsAstroProject(root)
 
 	var out []Warning
@@ -528,19 +554,27 @@ func ScanWarnings(root string) ([]Warning, error) {
 			out = append(out, ScanAstroEnv(rel, src)...)
 		}
 
-		switch {
-		case warnIsStructureFile(d.Name()):
+		// Not a switch: a schema file may itself use the `type: 'singleton'` spelling, and a
+		// config file may hold both the structure and the schemas. Classifying it as only one
+		// would hide the other from the check.
+		if warnIsStructureFile(d.Name(), src) {
 			structures[rel] = src
-		case warnIsSchemaFile(rel, src):
+		}
+		if warnIsSchemaFile(rel, src) {
 			schemas[rel] = src
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, ScanSummary{}, err
 	}
 
 	out = append(out, CheckSingletons(structures, schemas)...)
 	warnSort(out)
-	return out, nil
+
+	summary := ScanSummary{StructureFiles: len(structures), SchemaFiles: len(schemas)}
+	for rel, src := range structures {
+		summary.SingletonEntries += len(scanStructureSingletons(rel, src))
+	}
+	return out, summary, nil
 }
