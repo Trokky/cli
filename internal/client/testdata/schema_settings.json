@@ -1,0 +1,29 @@
+{
+  "name": "siteSettings",
+  "title": "Site Settings",
+  "type": "singleton",
+  "description": "Global site configuration",
+  "fields": {
+    "siteTitle": {
+      "type": "string",
+      "title": "Site title",
+      "required": true
+    },
+    "logo": {
+      "type": "media",
+      "title": "Logo"
+    },
+    "maintenance": {
+      "type": "boolean",
+      "title": "Maintenance mode"
+    },
+    "theme": {
+      "type": "json",
+      "title": "Theme tokens"
+    },
+    "launchedAt": {
+      "type": "datetime",
+      "title": "Launched at"
+    }
+  }
+}

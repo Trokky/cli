@@ -1,0 +1,54 @@
+{
+  "name": "article",
+  "title": "Article",
+  "type": "document",
+  "description": "Blog articles with rich content and metadata",
+  "fields": {
+    "title": {
+      "type": "string",
+      "title": "Title",
+      "required": true,
+      "validation": {
+        "maxLength": 100
+      }
+    },
+    "slug": {
+      "type": "slug",
+      "title": "URL",
+      "description": "Slug de la page",
+      "required": true,
+      "options": {
+        "maxLength": 200
+      }
+    },
+    "excerpt": {
+      "type": "text",
+      "title": "Excerpt",
+      "required": false,
+      "validation": {
+        "maxLength": 300
+      }
+    },
+    "category": {
+      "type": "reference",
+      "title": "Category",
+      "to": "category",
+      "required": false
+    },
+    "content": {
+      "type": "richtext",
+      "title": "Content",
+      "required": true
+    },
+    "featured": {
+      "type": "boolean",
+      "title": "Featured",
+      "default": false
+    },
+    "publishedAt": {
+      "type": "date",
+      "title": "Published at",
+      "default": "now"
+    }
+  }
+}

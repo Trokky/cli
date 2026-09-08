@@ -1,0 +1,72 @@
+{
+  "name": "home-page",
+  "title": "Home Page",
+  "type": "document",
+  "description": "Legacy array-form schema for the landing page",
+  "fields": [
+    {
+      "name": "hero",
+      "type": "object",
+      "title": "Hero",
+      "required": true,
+      "fields": [
+        { "name": "heading", "type": "string", "required": true },
+        { "name": "image", "type": "image" },
+        {
+          "name": "cta",
+          "type": "object",
+          "fields": [
+            { "name": "label", "type": "string" },
+            { "name": "href", "type": "url" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "tags",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    {
+      "name": "blocks",
+      "type": "array",
+      "of": {
+        "type": "object",
+        "fields": [
+          { "name": "title", "type": "string", "required": true },
+          { "name": "body", "type": "text" }
+        ]
+      }
+    },
+    {
+      "name": "gallery",
+      "type": "array"
+    },
+    {
+      "name": "cover",
+      "type": "media",
+      "title": "Cover"
+    },
+    {
+      "name": "hero-image",
+      "type": "image",
+      "title": "Hero image"
+    },
+    {
+      "name": "related",
+      "type": "reference",
+      "title": "Related",
+      "to": ["category", "author"]
+    },
+    {
+      "name": "legacyOwner",
+      "type": "reference",
+      "options": { "to": "author" }
+    },
+    {
+      "name": "weird",
+      "type": "myCustomField",
+      "title": "Custom widget"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "name": "category",
+  "title": "Category",
+  "type": "document",
+  "description": "Article categories",
+  "fields": {
+    "name": {
+      "type": "string",
+      "title": "Name",
+      "required": true
+    },
+    "description": {
+      "type": "text",
+      "title": "Description"
+    },
+    "order": {
+      "type": "number",
+      "title": "Order"
+    }
+  }
+}
