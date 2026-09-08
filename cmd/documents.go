@@ -27,12 +27,19 @@ var documentsCmd = &cobra.Command{
 var docsListCmd = &cobra.Command{
 	Use:   "list <collection>",
 	Short: "List documents in a collection",
-	Long: `List documents with filtering, sorting, and pagination.
+	Long: `List documents with filtering, sorting, searching, and pagination.
+
+Sorting uses the server's prefix notation: --sort _createdAt --order desc is
+sent as sort=-_createdAt, and --order asc (the default) as sort=_createdAt.
+A field already written as -_createdAt or _createdAt.desc is sent unchanged.
 
 Example:
   trokky documents list posts
   trokky documents list posts --limit 5 --status published
+  trokky documents list posts --sort _createdAt --order desc
   trokky documents list posts --filter '{"featured":true}' --sort _createdAt --order desc
+  trokky documents list posts --limit 10 --page 2
+  trokky documents list posts --search hello
   trokky documents list posts --format ids-only
   trokky documents list posts --count`,
 	Args: cobra.ExactArgs(1),
@@ -43,57 +50,28 @@ Example:
 		}
 
 		collection := args[0]
-		limit, _ := cmd.Flags().GetInt("limit")
-		offset, _ := cmd.Flags().GetInt("offset")
-		filter, _ := cmd.Flags().GetString("filter")
-		sort, _ := cmd.Flags().GetString("sort")
-		order, _ := cmd.Flags().GetString("order")
-		status, _ := cmd.Flags().GetString("status")
-		expand, _ := cmd.Flags().GetString("expand")
+		q := listQuery{}
+		q.Limit, _ = cmd.Flags().GetInt("limit")
+		q.Offset, _ = cmd.Flags().GetInt("offset")
+		q.Page, _ = cmd.Flags().GetInt("page")
+		q.Filter, _ = cmd.Flags().GetString("filter")
+		q.Sort, _ = cmd.Flags().GetString("sort")
+		q.Order, _ = cmd.Flags().GetString("order")
+		q.Status, _ = cmd.Flags().GetString("status")
+		q.Expand, _ = cmd.Flags().GetString("expand")
+		q.Search, _ = cmd.Flags().GetString("search")
+		q.Count, _ = cmd.Flags().GetBool("count")
 		format, _ := cmd.Flags().GetString("format")
-		countOnly, _ := cmd.Flags().GetBool("count")
+		countOnly := q.Count
 
 		// Validate format
 		if format != "json" && format != "ids-only" && format != "table" {
 			return fmt.Errorf("invalid format %q: must be 'json', 'table', or 'ids-only'", format)
 		}
 
-		// Build query params
-		params := url.Values{}
-		if limit > 0 {
-			params.Set("limit", fmt.Sprintf("%d", limit))
-		}
-		if offset > 0 {
-			params.Set("offset", fmt.Sprintf("%d", offset))
-		}
-		if filter != "" {
-			params.Set("filter", filter)
-		}
-		if sort != "" {
-			sortConfig := map[string]string{sort: order}
-			sortJSON, _ := json.Marshal(sortConfig)
-			params.Set("sort", string(sortJSON))
-		}
-		if status != "" {
-			if filter != "" {
-				// Merge with existing filter
-				var existing map[string]interface{}
-				if err := json.Unmarshal([]byte(filter), &existing); err != nil {
-					return fmt.Errorf("--filter must be a JSON object when combined with --status")
-				}
-				existing["_status"] = status
-				merged, _ := json.Marshal(existing)
-				params.Set("filter", string(merged))
-			} else {
-				filterJSON, _ := json.Marshal(map[string]string{"_status": status})
-				params.Set("filter", string(filterJSON))
-			}
-		}
-		if expand != "" {
-			params.Set("expand", expand)
-		}
-		if countOnly {
-			params.Set("count", "true")
+		params, err := buildListQuery(q)
+		if err != nil {
+			return err
 		}
 
 		query := ""
@@ -574,6 +552,8 @@ func init() {
 	// list flags
 	docsListCmd.Flags().Int("limit", 20, "maximum number of documents to return")
 	docsListCmd.Flags().Int("offset", 0, "number of documents to skip")
+	docsListCmd.Flags().Int("page", 0, "1-based page number (used with --limit)")
+	docsListCmd.Flags().String("search", "", "full-text search query")
 	docsListCmd.Flags().String("filter", "", "JSON filter conditions")
 	docsListCmd.Flags().String("sort", "", "field to sort by")
 	docsListCmd.Flags().String("order", "asc", "sort order (asc or desc)")
