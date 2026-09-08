@@ -24,6 +24,11 @@ export interface MediaFieldValue {
   variant?: string
 }
 
+export interface RichTextValue {
+  type: 'doc'
+  content?: unknown[]
+}
+
 export interface Reference<T extends string = string> {
   _ref: string
   _type: T

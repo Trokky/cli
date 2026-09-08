@@ -370,6 +370,13 @@ func generateTypeScript(schemas []Schema, source string) string {
 	b.WriteString("  variant?: string\n")
 	b.WriteString("}\n\n")
 
+	// Rich text is stored as a ProseMirror document ({ type: 'doc', content: [...] }),
+	// see studio RichTextField/format-converter.ts. Portable text is an array of blocks.
+	b.WriteString("export interface RichTextValue {\n")
+	b.WriteString("  type: 'doc'\n")
+	b.WriteString("  content?: unknown[]\n")
+	b.WriteString("}\n\n")
+
 	b.WriteString("export interface Reference<T extends string = string> {\n")
 	b.WriteString("  _ref: string\n")
 	b.WriteString("  _type: T\n")
@@ -481,7 +488,9 @@ func mapFieldType(f Field, prefix string, known map[string]bool) string {
 		return "boolean"
 	case "date", "datetime":
 		return "string"
-	case "richtext", "portabletext", "blockcontent":
+	case "richtext":
+		return "RichTextValue"
+	case "portable", "portabletext", "blockcontent":
 		return "unknown[]"
 	case "json":
 		return "unknown"

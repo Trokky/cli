@@ -16,7 +16,7 @@ var generateTypesCmd = &cobra.Command{
 
 Example:
   trokky generate-types -o ./src/types/trokky
-  trokky generate-types --instance https://cms.example.com -o ./types`,
+  trokky generate-types --url https://cms.example.com/api -o ./types`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := client.FromContext(cmd)
 		if err != nil {

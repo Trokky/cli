@@ -24,6 +24,11 @@ export interface MediaFieldValue {
   variant?: string
 }
 
+export interface RichTextValue {
+  type: 'doc'
+  content?: unknown[]
+}
+
 export interface Reference<T extends string = string> {
   _ref: string
   _type: T
@@ -40,7 +45,7 @@ export interface ArticleDocument extends BaseDocument {
   slug: string
   excerpt?: string
   category?: Reference<'category'> | CategoryDocument
-  content: unknown[]
+  content: RichTextValue
   featured?: boolean
   publishedAt?: string
 }

@@ -55,7 +55,7 @@ func TestGenerateTypeScript(t *testing.T) {
 				"  slug: string",
 				"  excerpt?: string",
 				"  category?: Reference<'category'> | CategoryDocument",
-				"  content: unknown[]",
+				"  content: RichTextValue",
 				"  featured?: boolean",
 				"  publishedAt?: string",
 				"export interface CategoryDocument extends BaseDocument {",
