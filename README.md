@@ -67,6 +67,7 @@ trokky create my-site
 | `export <collection> [file]` | Export a collection to JSON |
 | `import <collection> <file>` | Import documents from JSON |
 | `create <project-name>` | Scaffold a new Trokky project |
+| `migrate` | Upgrade a v0.1.x project to Trokky v2 packages |
 | `generate-types` | Generate TypeScript types from schemas |
 
 ## Authentication
@@ -217,6 +218,113 @@ adapter in the single `trokky` package: the scaffold mounts
 `TrokkyExpress` from `@trokky/trokky/express` and enables adapters through side-effect
 imports — `@trokky/trokky/adapters/filesystem-data` or `@trokky/trokky/adapters/postgres-data`
 for data, and `@trokky/trokky/adapters/filesystem-media` for media.
+
+## Migrating a v0.1.x project to v2
+
+`trokky migrate` is a codemod for projects still on the old split npm packages.
+It rewrites every quoted `@trokky/*` module specifier in the project's JS, TS
+and Astro sources, and updates the dependency sections of every `package.json`.
+It works purely on files: no instance, URL or token is needed. `node_modules`,
+`dist`, `build`, `.git`, `.astro` and symlinks are never touched, and the
+default is a dry run.
+
+Recommended order:
+
+```bash
+# 1. Back up the OLD site first — the migration changes code, not content,
+#    but you want a restore point before the version bump.
+trokky backup --output before-migrate.zip
+
+# 2. See what would change.
+trokky migrate --dry-run
+
+# 3. Read the report and fix the warnings (especially the singleton ones).
+
+# 4. Apply.
+trokky migrate --write
+
+# 5. Reinstall and build, then diff and commit.
+npm install && npm run build
+git diff
+```
+
+| Flag | Description |
+|------|-------------|
+| `--path <dir>` | Project directory (default `.`) |
+| `--dry-run` | Report only; this is the default, the flag just makes it explicit |
+| `--write` | Actually rewrite the files |
+| `-y, --yes` | Skip the confirmation prompt |
+| `--force` | Write even when the git working tree is dirty |
+
+`--dry-run` and `--write` are mutually exclusive. When `--path` is inside a git
+repository with uncommitted changes (untracked files included), `--write`
+refuses to run: a clean tree is what lets you `git diff` the migration and
+`git checkout` your way out of it. Pass `--force` to override.
+
+### Package mapping
+
+| Old package | v2 |
+|-------------|----|
+| `@trokky/core` | `@trokky/trokky` |
+| `@trokky/routes` | `@trokky/trokky` |
+| `@trokky/express` | `@trokky/trokky/express` |
+| `@trokky/structure` | `@trokky/trokky/structure` |
+| `@trokky/types` | `@trokky/trokky/types` |
+| `@trokky/i18n` | `@trokky/trokky/i18n` |
+| `@trokky/mail` | `@trokky/trokky/mail` |
+| `@trokky/mail-adapter-console` | `@trokky/trokky/mail/console` |
+| `@trokky/mail-adapter-resend` | `@trokky/trokky/mail/resend` |
+| `@trokky/mail-adapter-smtp` | `@trokky/trokky/mail/smtp` |
+| `@trokky/adapter-filesystem` | `@trokky/trokky/adapters/filesystem-data` |
+| `@trokky/adapter-filesystem-data` | `@trokky/trokky/adapters/filesystem-data` |
+| `@trokky/adapter-filesystem-media` | `@trokky/trokky/adapters/filesystem-media` |
+| `@trokky/adapter-postgres-data` | `@trokky/trokky/adapters/postgres-data` |
+| `@trokky/fields` | `@trokky/studio` |
+| `@trokky/client` | unchanged, bumped to `^2.0.0` |
+| `@trokky/studio` | unchanged, bumped to `^2.0.0` |
+
+Subpaths follow their package: `@trokky/core/schema` becomes
+`@trokky/trokky/schema`. The longest rule wins, so
+`@trokky/mail-adapter-console` never matches `@trokky/mail` first.
+
+In each `package.json`, the old packages are removed from `dependencies`,
+`devDependencies` and `peerDependencies`, and `@trokky/trokky`, `@trokky/studio`
+and `@trokky/client` are pinned to `^2.0.0`. `@trokky/trokky` is added only
+where an old package was actually removed — to `dependencies`, or to
+`devDependencies` when that is the only place a removal happened, never to
+`peerDependencies` — so a frontend-only workspace that just uses
+`@trokky/client` gets the version bump and nothing else. Key order, the file's
+own indentation and its trailing newline are preserved — only the dependency
+lines change.
+
+### Warnings
+
+Some things a text codemod must not fix by itself. The report lists them with
+their file and line; they never fail the command.
+
+**`internal-import`** — the file imports a `@trokky` package's internals, e.g.
+`../node_modules/@trokky/fields/src/definitions/RichTextField/format-converter.js`.
+v2 does not ship `src/` paths, and the relative form is not a bare specifier,
+so it is left exactly as it is. Rewrite those imports by hand against the
+package's public entry points.
+
+**`astro-env`** — the file reads `import.meta.env.TROKKY_API_URL`. Astro inlines
+that value at *build* time, not at runtime, so setting `TROKKY_API_URL` only for
+the server process leaves the built site pointing at whatever was in the
+environment when it was built — every media request then 404s. Set the variable
+for the site build too.
+
+**`singleton-divergence`** — the structure declares an entry as
+`type: 'singleton'` but the matching schema does not set `singleton: true` (or
+no schema declares that name at all). This is the data-loss trap the command
+exists for: `trokky restore` will POST such a document instead of doing an
+id-preserving PUT, which regenerates the document id and orphans the structure
+entry pointing at the old one. Add `singleton: true` to the schema **before**
+running `trokky restore` against the migrated site.
+
+**`singleton-near-miss`** — the schema sets `isSingleton: true`. That key is a
+structure navigation key and is silently ignored on a schema, so the document
+still behaves as a collection. Use `singleton: true`.
 
 ## Generate Types
 
