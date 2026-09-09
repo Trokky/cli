@@ -42,7 +42,6 @@ func Scaffold(cfg ProjectConfig, targetDir string) error {
 		{filepath.Join(targetDir, "nodemon.json"), GenerateNodemonConfig()},
 		{filepath.Join(targetDir, ".env.example"), GenerateEnvExample(cfg)},
 		{filepath.Join(targetDir, ".gitignore"), GenerateGitignore()},
-		{filepath.Join(targetDir, ".npmrc"), GenerateNpmrc()},
 		{filepath.Join(targetDir, "schemas", "index.ts"), GenerateSchemaIndex(cfg)},
 	}
 

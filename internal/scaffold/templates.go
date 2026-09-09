@@ -623,8 +623,3 @@ export const schemas = [
 `
 }
 
-// GenerateNpmrc points the @trokky scope at GitHub Packages, where the 2.0.0
-// packages are published. The token comes from the environment, never the file.
-func GenerateNpmrc() string {
-	return "@trokky:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}\n"
-}

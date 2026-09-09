@@ -177,17 +177,10 @@ func TestScaffoldTemplates(t *testing.T) {
 				t.Errorf("trokky.config.ts missing mail config:\n%s", cfgFile)
 			}
 
-			// (d) .npmrc maps the @trokky scope to GitHub Packages and never embeds a token
-			npmrc, ok := files["scaffold:.npmrc"]
-			if !ok {
-				t.Error(".npmrc missing from the scaffolded project")
-			} else {
-				if !strings.Contains(npmrc, "@trokky:registry=https://npm.pkg.github.com") {
-					t.Errorf(".npmrc does not map the @trokky scope to GitHub Packages:\n%s", npmrc)
-				}
-				if !strings.Contains(npmrc, "${GITHUB_TOKEN}") || strings.Contains(npmrc, "ghp_") {
-					t.Errorf(".npmrc must reference the token via environment only:\n%s", npmrc)
-				}
+			// (d) no .npmrc: the packages are on the public npm registry, so a
+			// generated project must install with no registry config and no token
+			if npmrc, ok := files["scaffold:.npmrc"]; ok {
+				t.Errorf("scaffold wrote an .npmrc; a generated project needs no registry config:\n%s", npmrc)
 			}
 
 			// No d1/r2/s3 leftovers in generated env/config
