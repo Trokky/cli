@@ -20,10 +20,20 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # The tap is pushed over SSH with a deploy key scoped to homebrew-tap.
+      # Written to a file because goreleaser takes a path, not the key itself.
+      - name: Write tap deploy key
+        run: |
+          install -m 700 -d "$RUNNER_TEMP/ssh"
+          printf '%s\n' "${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}" > "$RUNNER_TEMP/ssh/tap_key"
+          chmod 600 "$RUNNER_TEMP/ssh/tap_key"
+          ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> "$RUNNER_TEMP/ssh/known_hosts" 2>/dev/null
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_DEPLOY_KEY_PATH: ${{ runner.temp }}/ssh/tap_key
+          GIT_SSH_COMMAND: "ssh -i ${{ runner.temp }}/ssh/tap_key -o UserKnownHostsFile=${{ runner.temp }}/ssh/known_hosts"

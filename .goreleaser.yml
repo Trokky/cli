@@ -26,7 +26,11 @@ brews:
   - repository:
       owner: Trokky
       name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+      # Pushed over SSH with a deploy key scoped to homebrew-tap alone, rather
+      # than a personal access token that can reach every repo and expires.
+      git:
+        url: "git@github.com:Trokky/homebrew-tap.git"
+        private_key: "{{ .Env.HOMEBREW_TAP_DEPLOY_KEY_PATH }}"
     homepage: "https://github.com/Trokky/cli"
     description: "CLI for managing Trokky CMS instances"
     license: "MIT"
