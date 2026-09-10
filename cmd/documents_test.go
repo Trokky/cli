@@ -174,8 +174,10 @@ func TestDocumentsListSendsV2QueryParams(t *testing.T) {
 		t.Fatalf("command failed: %v", err)
 	}
 
-	if gotPath != "/collections/posts" {
-		t.Errorf("path = %q, want %q", gotPath, "/collections/posts")
+	// A --url without an /api suffix is normalized to the API root, so the
+	// request lands on /api/collections/posts.
+	if gotPath != "/api/collections/posts" {
+		t.Errorf("path = %q, want %q", gotPath, "/api/collections/posts")
 	}
 	if got := gotQuery.Get("sort"); got != "-_createdAt" {
 		t.Errorf("sort = %q, want %q", got, "-_createdAt")
