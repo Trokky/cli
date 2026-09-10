@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -237,13 +238,40 @@ func SetDefaultInstance(name string) (bool, error) {
 	return true, Save(cfg)
 }
 
-// NormalizeBaseURL trims trailing slashes and ensures the URL ends with /api.
+// NormalizeBaseURL trims trailing slashes and ensures the URL points at the
+// Trokky API root, so that "http://cms.example.com:3210" and
+// "http://cms.example.com:3210/api/" both resolve to
+// "http://cms.example.com:3210/api".
+//
+// Rules:
+//   - Trailing slashes are always trimmed.
+//   - If the path already contains an "api" segment the URL is left alone.
+//     This keeps the function idempotent for ".../api" and ".../api/", and
+//     avoids mangling a URL that is already mounted deeper than the API root
+//     (e.g. ".../api/v1" or ".../backend/api" stay as they are).
+//   - Otherwise "/api" is appended.
+//
+// An empty string is returned unchanged.
 func NormalizeBaseURL(rawURL string) string {
-	u := strings.TrimRight(rawURL, "/")
-	if !strings.HasSuffix(u, "/api") {
-		u += "/api"
+	trimmed := strings.TrimRight(rawURL, "/")
+	if trimmed == "" {
+		return trimmed
 	}
-	return u
+
+	if u, err := url.Parse(trimmed); err == nil && u.Host != "" {
+		for _, segment := range strings.Split(u.Path, "/") {
+			if segment == "api" {
+				return trimmed
+			}
+		}
+		return trimmed + "/api"
+	}
+
+	// Unparseable or host-less input: fall back to a plain suffix check.
+	if strings.HasSuffix(trimmed, "/api") {
+		return trimmed
+	}
+	return trimmed + "/api"
 }
 
 // MaskToken masks a token for display, showing first 4 and last 4 characters.
@@ -262,7 +290,7 @@ func ResolveCredentials(opts ResolveOptions) (*ResolvedCredentials, error) {
 	// Priority 1: CLI flags
 	if opts.URL != "" && opts.Token != "" {
 		return &ResolvedCredentials{
-			URL:    opts.URL,
+			URL:    NormalizeBaseURL(opts.URL),
 			Token:  opts.Token,
 			Source: "cli",
 		}, nil
@@ -273,7 +301,7 @@ func ResolveCredentials(opts ResolveOptions) (*ResolvedCredentials, error) {
 	envToken := os.Getenv(EnvToken)
 	if envURL != "" && envToken != "" {
 		return &ResolvedCredentials{
-			URL:    envURL,
+			URL:    NormalizeBaseURL(envURL),
 			Token:  envToken,
 			Source: "env",
 		}, nil

@@ -496,7 +496,110 @@ func TestMaskToken_JustAboveThreshold(t *testing.T) {
 	}
 }
 
+// --- NormalizeBaseURL ---
+
+func TestNormalizeBaseURL(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"appends missing /api", "http://cms.example.com:3210", "http://cms.example.com:3210/api"},
+		{"already has /api", "http://cms.example.com:3210/api", "http://cms.example.com:3210/api"},
+		{"trailing slash", "http://cms.example.com:3210/", "http://cms.example.com:3210/api"},
+		{"trailing slash after /api", "http://cms.example.com:3210/api/", "http://cms.example.com:3210/api"},
+		{"multiple trailing slashes", "http://cms.example.com:3210///", "http://cms.example.com:3210/api"},
+		{"https with subpath", "https://cms.example.com/cms", "https://cms.example.com/cms/api"},
+		{"api segment in subpath", "https://cms.example.com/backend/api", "https://cms.example.com/backend/api"},
+		{"versioned api path left alone", "https://cms.example.com/api/v1", "https://cms.example.com/api/v1"},
+		{"api in hostname only", "https://api.example.com", "https://api.example.com/api"},
+		{"empty string", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NormalizeBaseURL(tt.in)
+			if got != tt.want {
+				t.Fatalf("NormalizeBaseURL(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+			// Normalizing again must not change the result.
+			if again := NormalizeBaseURL(got); again != got {
+				t.Fatalf("NormalizeBaseURL is not idempotent: %q -> %q -> %q", tt.in, got, again)
+			}
+		})
+	}
+}
+
 // --- ResolveCredentials ---
+
+func TestResolveCredentials_NormalizesURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{"flag without /api", "http://cms.example.com:3210", "http://cms.example.com:3210/api"},
+		{"flag with /api", "http://cms.example.com:3210/api", "http://cms.example.com:3210/api"},
+		{"flag with trailing slash", "http://cms.example.com:3210/", "http://cms.example.com:3210/api"},
+		{"flag with /api and trailing slash", "http://cms.example.com:3210/api/", "http://cms.example.com:3210/api"},
+		{"flag mounted under a subpath", "https://cms.example.com/backend/api", "https://cms.example.com/backend/api"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearEnvVars(t)
+
+			creds, err := ResolveCredentials(ResolveOptions{URL: tt.url, Token: "flag-token"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if creds == nil {
+				t.Fatal("expected credentials")
+			}
+			if creds.Source != "cli" {
+				t.Fatalf("Source = %q, want 'cli'", creds.Source)
+			}
+			if creds.URL != tt.want {
+				t.Fatalf("URL = %q, want %q", creds.URL, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveCredentials_NormalizesEnvURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{"env without /api", "http://cms.example.com:3210", "http://cms.example.com:3210/api"},
+		{"env with /api", "http://cms.example.com:3210/api", "http://cms.example.com:3210/api"},
+		{"env with trailing slash", "http://cms.example.com:3210/", "http://cms.example.com:3210/api"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			overrideHome(t)
+			clearEnvVars(t)
+			t.Setenv(EnvURL, tt.url)
+			t.Setenv(EnvToken, "env-token")
+
+			creds, err := ResolveCredentials(ResolveOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if creds == nil {
+				t.Fatal("expected credentials from env")
+			}
+			if creds.Source != "env" {
+				t.Fatalf("Source = %q, want 'env'", creds.Source)
+			}
+			if creds.URL != tt.want {
+				t.Fatalf("URL = %q, want %q", creds.URL, tt.want)
+			}
+		})
+	}
+}
 
 func TestResolveCredentials_CLIFlags(t *testing.T) {
 	clearEnvVars(t)
@@ -514,7 +617,8 @@ func TestResolveCredentials_CLIFlags(t *testing.T) {
 	if creds.Source != "cli" {
 		t.Fatalf("Source = %q, want 'cli'", creds.Source)
 	}
-	if creds.URL != "http://from-flag" {
+	// The CLI URL is normalized to the API root (see TestResolveCredentials_NormalizesURL).
+	if creds.URL != "http://from-flag/api" {
 		t.Fatalf("URL = %q", creds.URL)
 	}
 	if creds.Token != "flag-token" {
@@ -549,7 +653,8 @@ func TestResolveCredentials_EnvVars(t *testing.T) {
 	if creds.Source != "env" {
 		t.Fatalf("Source = %q, want 'env'", creds.Source)
 	}
-	if creds.URL != "http://from-env" {
+	// The env URL is normalized to the API root (see TestResolveCredentials_NormalizesURL).
+	if creds.URL != "http://from-env/api" {
 		t.Fatalf("URL = %q", creds.URL)
 	}
 }
@@ -667,7 +772,7 @@ func TestRequireCredentials_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if creds.URL != "http://ok" {
+	if creds.URL != "http://ok/api" {
 		t.Fatalf("URL = %q", creds.URL)
 	}
 }
