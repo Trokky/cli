@@ -179,8 +179,10 @@ Example:
 							filename = item.ID
 						}
 
-						// Stream directly to zip
-						w, err := zw.Create("media/" + filename)
+						// Stream directly to zip, under an id-scoped path so files that
+						// share an original filename cannot overwrite each other.
+						archivePath := backup.MediaArchivePath(item.ID, filename)
+						w, err := zw.Create(archivePath)
 						if err != nil {
 							resp.Body.Close()
 							continue
@@ -194,9 +196,10 @@ Example:
 						}
 
 						mediaIndex[item.ID] = backup.MediaFileInfo{
-							Filename: filename,
-							MimeType: item.MimeType,
-							Size:     written,
+							Filename:    filename,
+							MimeType:    item.MimeType,
+							ArchivePath: archivePath,
+							Size:        written,
 						}
 						mediaCount++
 					}

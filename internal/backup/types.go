@@ -61,15 +61,15 @@ func (s *SchemaDefinition) UnmarshalFields() {
 
 // FieldDefinition describes a field in a schema.
 type FieldDefinition struct {
-	Name       string            `json:"name"`
-	Type       string            `json:"type"`
-	Title      string            `json:"title,omitempty"`
-	Required   bool              `json:"required,omitempty"`
-	To         json.RawMessage   `json:"to,omitempty"`    // string or []string for references
-	Of         *FieldDefinition  `json:"of,omitempty"`    // for array fields
-	Fields     []FieldDefinition `json:"fields,omitempty"` // for object fields
-	Hidden     bool              `json:"hidden,omitempty"`
-	ReadOnly   bool              `json:"readOnly,omitempty"`
+	Name     string            `json:"name"`
+	Type     string            `json:"type"`
+	Title    string            `json:"title,omitempty"`
+	Required bool              `json:"required,omitempty"`
+	To       json.RawMessage   `json:"to,omitempty"`     // string or []string for references
+	Of       *FieldDefinition  `json:"of,omitempty"`     // for array fields
+	Fields   []FieldDefinition `json:"fields,omitempty"` // for object fields
+	Hidden   bool              `json:"hidden,omitempty"`
+	ReadOnly bool              `json:"readOnly,omitempty"`
 }
 
 // FieldTargets returns the reference target collections for a field.
@@ -99,12 +99,33 @@ type MediaFileInfo struct {
 	MimeType string                 `json:"mimeType"`
 	Size     int64                  `json:"size"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
+	// ArchivePath is where the bytes live inside the zip. Archives written
+	// before this field existed stored every file as "media/<filename>", which
+	// let two media items with the same original filename overwrite each other.
+	ArchivePath string `json:"archivePath,omitempty"`
+}
+
+// MediaArchivePath is the zip entry for a media item: scoped by the item's id so
+// two uploads that share an original filename — "Photo-de-famille.jpg" appears
+// 17 times in one production instance — never collide inside the archive.
+func MediaArchivePath(id, filename string) string {
+	if filename == "" {
+		filename = id
+	}
+	return "media/" + id + "/" + filename
+}
+
+// LegacyMediaArchivePath is the flat layout older archives used. A restore
+// still reads it, but same-named files in such an archive have already
+// overwritten each other and cannot be told apart.
+func LegacyMediaArchivePath(filename string) string {
+	return "media/" + filename
 }
 
 // BackupStatistics holds summary stats for a backup.
 type BackupStatistics struct {
-	TotalDocuments int            `json:"totalDocuments"`
-	TotalMedia     int            `json:"totalMedia"`
-	Collections    map[string]int `json:"collections"`
-	BackupSizeBytes int64         `json:"backupSizeBytes"`
+	TotalDocuments  int            `json:"totalDocuments"`
+	TotalMedia      int            `json:"totalMedia"`
+	Collections     map[string]int `json:"collections"`
+	BackupSizeBytes int64          `json:"backupSizeBytes"`
 }

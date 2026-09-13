@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -463,5 +464,145 @@ func TestIsPermissionDenied(t *testing.T) {
 				t.Errorf("isPermissionDenied(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+// writeCollidingBackupZip builds an archive holding two media items that share
+// an original filename but carry different bytes. With idScoped the entries use
+// the current media/<id>/<filename> layout; otherwise the flat legacy layout,
+// where the second entry overwrites the first inside the zip reader's lookup.
+func writeCollidingBackupZip(t *testing.T, idScoped bool) string {
+	t.Helper()
+
+	entryFor := func(id string) string {
+		if idScoped {
+			return "media/" + id + "/photo.png"
+		}
+		return "media/photo.png"
+	}
+	manifest := map[string]interface{}{
+		"version":         "2.0",
+		"timestamp":       "2026-01-01T00:00:00Z",
+		"source":          map[string]interface{}{"url": "https://cms.example.com/api"},
+		"schemas":         []map[string]interface{}{{"name": "posts", "title": "Posts", "fields": []map[string]interface{}{{"name": "title", "type": "string"}}}},
+		"dependencyGraph": map[string][]string{},
+		"restoreOrder":    []string{"posts"},
+		"mediaIndex": map[string]interface{}{
+			"media-old-a": map[string]interface{}{"filename": "photo.png", "mimeType": "image/png", "size": 5},
+			"media-old-b": map[string]interface{}{"filename": "photo.png", "mimeType": "image/png", "size": 5},
+		},
+		"statistics": map[string]interface{}{"totalDocuments": 1, "totalMedia": 2},
+	}
+	manifestJSON, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	docJSON, err := json.Marshal(map[string]interface{}{"id": "doc-old-1", "title": "Example post"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, e := range []struct {
+		name string
+		data []byte
+	}{
+		{"manifest.json", manifestJSON},
+		{"collections/posts/doc-old-1.json", docJSON},
+		{entryFor("media-old-a"), []byte("bytesA")},
+		{entryFor("media-old-b"), []byte("bytesB")},
+	} {
+		w, err := zw.Create(e.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(e.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// uploadedBodies returns the multipart bodies of every /media/upload request.
+func uploadedBodies(rec *recorder) []string {
+	var out []string
+	for _, r := range rec.all() {
+		if r.Path == "/media/upload" {
+			out = append(out, r.Body)
+		}
+	}
+	return out
+}
+
+func newRestoreServer(rec *recorder) *httptest.Server {
+	uploads := 0
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.record(r)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && apiPath(r) == "/collections":
+			io.WriteString(w, testCollectionsResponse)
+		case r.Method == http.MethodPost && apiPath(r) == "/collections/posts":
+			io.WriteString(w, `{"success":true,"data":{"id":"`+testNewDocID+`"}}`)
+		case r.Method == http.MethodPost && apiPath(r) == "/media/upload":
+			uploads++
+			fmt.Fprintf(w, `{"success":true,"data":{"files":[{"id":"media-new-%d"}]}}`, uploads)
+		default:
+			io.WriteString(w, `{"success":true,"data":{}}`)
+		}
+	}))
+}
+
+func TestRestoreUploadsEachMediaItemsOwnBytesWhenFilenamesCollide(t *testing.T) {
+	rec := &recorder{}
+	server := newRestoreServer(rec)
+	defer server.Close()
+
+	stdout, stderr, err := runRestore(t, "--input", writeCollidingBackupZip(t, true), "--url", server.URL+"/api", "--token", "t", "-q")
+	if err != nil {
+		t.Fatalf("restore failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+
+	bodies := uploadedBodies(rec)
+	if len(bodies) != 2 {
+		t.Fatalf("expected 2 uploads, got %d", len(bodies))
+	}
+	joined := strings.Join(bodies, "\n")
+	for _, want := range []string{"bytesA", "bytesB"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("no upload carried %q; the two same-named files collapsed into one:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(stderr, "shares its filename") {
+		t.Errorf("id-scoped archive must not trigger the legacy collision warning:\n%s", stderr)
+	}
+}
+
+func TestRestoreReadsLegacyFlatLayoutAndWarnsOnCollisions(t *testing.T) {
+	rec := &recorder{}
+	server := newRestoreServer(rec)
+	defer server.Close()
+
+	stdout, stderr, err := runRestore(t, "--input", writeCollidingBackupZip(t, false), "--url", server.URL+"/api", "--token", "t", "-q")
+	if err != nil {
+		t.Fatalf("restore failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+
+	if n := len(uploadedBodies(rec)); n != 2 {
+		t.Fatalf("legacy archives must still restore every indexed item; got %d uploads", n)
+	}
+	if !strings.Contains(stderr, "shares its filename with 1 other file(s)") {
+		t.Errorf("expected a collision warning for the old-format archive, got:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "Take a fresh backup") {
+		t.Errorf("warning should tell the user how to get an uncorrupted archive:\n%s", stderr)
 	}
 }

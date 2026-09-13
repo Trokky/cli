@@ -448,26 +448,36 @@ Example:
 			} else {
 				fmt.Fprint(out, "  Restoring media... ")
 
-				// Build zip file lookup for media
+				// Build zip file lookup for media, keyed by full entry name. Current
+				// archives store each file under media/<id>/<filename>; older ones
+				// used the flat media/<filename>, where same-named files overwrote
+				// each other and only one survives.
 				mediaZipFiles := make(map[string]*zip.File)
+				legacyDuplicates := make(map[string]int)
 				for _, f := range zr.File {
-					if strings.HasPrefix(f.Name, "media/") {
-						// Strip "media/" prefix to get filename
-						name := f.Name[6:]
-						mediaZipFiles[name] = f
+					if !strings.HasPrefix(f.Name, "media/") {
+						continue
 					}
+					if _, seen := mediaZipFiles[f.Name]; seen {
+						legacyDuplicates[f.Name]++
+					}
+					mediaZipFiles[f.Name] = f
 				}
 
 				mediaTotal := len(manifest.MediaIndex)
 				mediaFailed := 0
 
 				for oldID, mediaInfo := range manifest.MediaIndex {
-					zipFile, ok := mediaZipFiles[mediaInfo.Filename]
-					if !ok {
+					entry, legacy := findMediaEntry(mediaZipFiles, oldID, mediaInfo)
+					if entry == "" {
 						fmt.Fprintf(errOut, "\n    Warning: media file %s not found in archive\n", mediaInfo.Filename)
 						mediaFailed++
 						continue
 					}
+					if legacy && legacyDuplicates[entry] > 0 {
+						fmt.Fprintf(errOut, "\n    Warning: %s shares its filename with %d other file(s) in this old-format archive; only one set of bytes survived, so %s may be restored with the wrong content. Take a fresh backup with this CLI version.\n", oldID, legacyDuplicates[entry], oldID)
+					}
+					zipFile := mediaZipFiles[entry]
 
 					// Retry up to 3 times with backoff
 					var result map[string]interface{}
@@ -727,4 +737,23 @@ func init() {
 	restoreCmd.Flags().Bool("overwrite", false, "overwrite existing documents on conflict")
 	restoreCmd.Flags().Bool("dry-run", false, "preview changes without applying")
 	rootCmd.AddCommand(restoreCmd)
+}
+
+// findMediaEntry resolves the zip entry holding a media item's bytes. It prefers
+// the path the manifest recorded, then the id-scoped layout, and finally the flat
+// legacy layout. The second return value reports whether the legacy layout was
+// used, because same-named files in that layout have already collided.
+func findMediaEntry(entries map[string]*zip.File, id string, info backup.MediaFileInfo) (string, bool) {
+	if info.ArchivePath != "" {
+		if _, ok := entries[info.ArchivePath]; ok {
+			return info.ArchivePath, false
+		}
+	}
+	if p := backup.MediaArchivePath(id, info.Filename); entries[p] != nil {
+		return p, false
+	}
+	if p := backup.LegacyMediaArchivePath(info.Filename); entries[p] != nil {
+		return p, true
+	}
+	return "", false
 }
