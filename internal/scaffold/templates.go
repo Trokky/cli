@@ -282,6 +282,8 @@ const mailFromName = process.env.EMAIL_FROM_NAME || '%s'
 		studioConfig = fmt.Sprintf(`
   structure,
   studio: {
+    // Public Studio URL: the device-flow approval page and email links derive from it.
+    url: process.env.STUDIO_URL,
     branding: { title: %q },
   },`, cfg.Name)
 	}
