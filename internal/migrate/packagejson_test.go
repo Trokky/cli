@@ -46,8 +46,8 @@ func TestRewritePackageJSONBasic(t *testing.T) {
   },
   "dependencies": {
     "express": "^4.19.2",
-    "@trokky/trokky": "^2.0.0",
-    "@trokky/studio": "^2.0.0",
+    "@trokky/trokky": "^3.0.0",
+    "@trokky/studio": "^3.0.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -66,9 +66,9 @@ func TestRewritePackageJSONBasic(t *testing.T) {
 
 	wantChanges := []string{
 		"removed @trokky/core",
-		"added @trokky/trokky ^2.0.0",
+		"added @trokky/trokky ^3.0.0",
 		"removed @trokky/express",
-		"@trokky/studio -> ^2.0.0",
+		"@trokky/studio -> ^3.0.0",
 		"removed @trokky/types",
 	}
 	if len(changes) != len(wantChanges) {
@@ -99,7 +99,7 @@ func TestRewritePackageJSONInsertsAtFirstRemoval(t *testing.T) {
 	want := `{
   "dependencies": {
     "a": "1",
-    "@trokky/trokky": "^2.0.0",
+    "@trokky/trokky": "^3.0.0",
     "b": "2",
     "c": "3"
   }
@@ -128,7 +128,7 @@ func TestRewritePackageJSONNoAddWhenNothingRemoved(t *testing.T) {
 	want := `{
   "name": "web",
   "dependencies": {
-    "@trokky/client": "^2.0.0",
+    "@trokky/client": "^3.0.0",
     "astro": "^4.15.0"
   }
 }
@@ -136,7 +136,7 @@ func TestRewritePackageJSONNoAddWhenNothingRemoved(t *testing.T) {
 	if string(out) != want {
 		t.Errorf("got:\n%s\nwant:\n%s", out, want)
 	}
-	if len(changes) != 1 || changes[0] != "@trokky/client -> ^2.0.0" {
+	if len(changes) != 1 || changes[0] != "@trokky/client -> ^3.0.0" {
 		t.Errorf("changes = %v, want only the client bump", changes)
 	}
 	if strings.Contains(string(out), "@trokky/trokky") {
@@ -164,11 +164,11 @@ func TestRewritePackageJSONAddsToDevDependenciesOnly(t *testing.T) {
 	}
 	want := `{
   "dependencies": {
-    "@trokky/client": "^2.0.0",
+    "@trokky/client": "^3.0.0",
     "astro": "^4.15.0"
   },
   "devDependencies": {
-    "@trokky/trokky": "^2.0.0",
+    "@trokky/trokky": "^3.0.0",
     "typescript": "^5.5.0"
   }
 }
@@ -176,7 +176,7 @@ func TestRewritePackageJSONAddsToDevDependenciesOnly(t *testing.T) {
 	if string(out) != want {
 		t.Errorf("got:\n%s\nwant:\n%s", out, want)
 	}
-	wantChanges := []string{"@trokky/client -> ^2.0.0", "removed @trokky/types", "added @trokky/trokky ^2.0.0"}
+	wantChanges := []string{"@trokky/client -> ^3.0.0", "removed @trokky/types", "added @trokky/trokky ^3.0.0"}
 	if len(changes) != len(wantChanges) {
 		t.Fatalf("changes = %v, want %v", changes, wantChanges)
 	}
@@ -205,7 +205,7 @@ func TestRewritePackageJSONAddsOnceWhenBothSectionsRemove(t *testing.T) {
 	}
 	want := `{
   "dependencies": {
-    "@trokky/trokky": "^2.0.0",
+    "@trokky/trokky": "^3.0.0",
     "express": "^4.19.2"
   },
   "devDependencies": {
@@ -238,7 +238,7 @@ func TestRewritePackageJSONNoAddWhenTrokkyAlreadyPresentElsewhere(t *testing.T) 
 	want := `{
   "dependencies": {},
   "devDependencies": {
-    "@trokky/trokky": "^2.0.0"
+    "@trokky/trokky": "^3.0.0"
   }
 }
 `
@@ -290,7 +290,7 @@ func TestRewritePackageJSONCollapsesEmptiedSection(t *testing.T) {
 	want := `{
   "name": "site",
   "dependencies": {
-    "@trokky/trokky": "^2.0.0"
+    "@trokky/trokky": "^3.0.0"
   },
   "devDependencies": {},
   "private": true
@@ -320,7 +320,7 @@ func TestRewritePackageJSONCollapsesLastSectionWithoutComma(t *testing.T) {
 	}
 	want := "{\n" +
 		"    \"dependencies\": {\n" +
-		"        \"@trokky/trokky\": \"^2.0.0\"\n" +
+		"        \"@trokky/trokky\": \"^3.0.0\"\n" +
 		"    },\n" +
 		"    \"peerDependencies\": {}\n" +
 		"}\n"
@@ -344,14 +344,14 @@ func TestRewritePackageJSONExistingTrokkyBumped(t *testing.T) {
 	}
 	want := `{
   "dependencies": {
-    "@trokky/trokky": "^2.0.0"
+    "@trokky/trokky": "^3.0.0"
   }
 }
 `
 	if string(out) != want {
 		t.Errorf("got:\n%s\nwant:\n%s", out, want)
 	}
-	if len(changes) != 2 || changes[0] != "@trokky/trokky -> ^2.0.0" || changes[1] != "removed @trokky/core" {
+	if len(changes) != 2 || changes[0] != "@trokky/trokky -> ^3.0.0" || changes[1] != "removed @trokky/core" {
 		t.Errorf("changes = %v", changes)
 	}
 }
@@ -395,7 +395,7 @@ func TestRewritePackageJSONPreservesIndentation(t *testing.T) {
 		want := "{\n" +
 			"    \"name\": \"x\",\n" +
 			"    \"dependencies\": {\n" +
-			"        \"@trokky/trokky\": \"^2.0.0\",\n" +
+			"        \"@trokky/trokky\": \"^3.0.0\",\n" +
 			"        \"express\": \"^4.19.2\"\n" +
 			"    },\n" +
 			"    \"private\": true\n" +
@@ -422,7 +422,7 @@ func TestRewritePackageJSONPreservesIndentation(t *testing.T) {
 		want := "{\n" +
 			"\t\"name\": \"x\",\n" +
 			"\t\"dependencies\": {\n" +
-			"\t\t\"@trokky/trokky\": \"^2.0.0\",\n" +
+			"\t\t\"@trokky/trokky\": \"^3.0.0\",\n" +
 			"\t\t\"express\": \"^4.19.2\"\n" +
 			"\t},\n" +
 			"\t\"private\": true\n" +
@@ -511,7 +511,7 @@ func TestRewritePackageJSONNoTrailingNewline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "{\n  \"dependencies\": {\n    \"@trokky/trokky\": \"^2.0.0\"\n  }\n}"
+	want := "{\n  \"dependencies\": {\n    \"@trokky/trokky\": \"^3.0.0\"\n  }\n}"
 	if string(out) != want {
 		t.Errorf("got %q, want %q", out, want)
 	}

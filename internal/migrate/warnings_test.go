@@ -141,7 +141,7 @@ func TestIsAstroProject(t *testing.T) {
 		{"astro file", map[string]string{"src/pages/index.astro": "---\n---\n<h1/>\n"}, true},
 		{"package.json dep", map[string]string{"package.json": `{"dependencies":{"astro":"^4.0.0"}}`}, true},
 		{"package.json devDep", map[string]string{"package.json": `{"devDependencies":{"astro":"^4.0.0"}}`}, true},
-		{"plain node project", map[string]string{"package.json": `{"dependencies":{"trokky":"^2.0.0"}}`, "server.ts": "//\n"}, false},
+		{"plain node project", map[string]string{"package.json": `{"dependencies":{"trokky":"^3.0.0"}}`, "server.ts": "//\n"}, false},
 		{"astro only in node_modules", map[string]string{"node_modules/x/a.astro": "x"}, false},
 	}
 
@@ -175,7 +175,7 @@ func TestScanWarningsAstroEnvOnlyForAstroProjects(t *testing.T) {
 
 	// Same source, no astro markers anywhere: not our problem.
 	plainRoot := warnWriteTree(t, map[string]string{
-		"package.json": `{"dependencies":{"trokky":"^2.0.0"}}`,
+		"package.json": `{"dependencies":{"trokky":"^3.0.0"}}`,
 		"src/page.ts":  warnAstroPage,
 	})
 	got, err = ScanWarnings(plainRoot)
@@ -382,5 +382,59 @@ func TestScanWarningsSortedByFileThenLine(t *testing.T) {
 func TestScanWarningsMissingRoot(t *testing.T) {
 	if _, err := ScanWarnings(filepath.Join(t.TempDir(), "nope")); err == nil {
 		t.Fatal("expected an error for a missing root")
+	}
+}
+
+func TestScanStudioMountReportsEveryPre30Idiom(t *testing.T) {
+	src := `import { startServer } from '@trokky/trokky/express'
+const server = await startServer(config)
+trokky.mount(app, { apiPath: '/api', studioPath: '/studio' })
+console.log(info.studioPath)
+const p = trokky.getMountedStudioPath()
+const { getStudioHTML } = await import('@trokky/studio/dist/server/assets.js')
+`
+	got := ScanStudioMount("server.ts", src)
+	kinds := map[string]bool{}
+	for _, w := range got {
+		if w.Kind != "studio-mount" {
+			t.Errorf("kind = %q, want studio-mount", w.Kind)
+		}
+		if w.File != "server.ts" || w.Line == 0 {
+			t.Errorf("bad location %s:%d", w.File, w.Line)
+		}
+		kinds[w.Message[:20]] = true
+	}
+	if len(got) != 4 {
+		t.Fatalf("expected 4 warnings (studioPath, getMountedStudioPath, .studioPath, dist import), got %d: %+v", len(got), got)
+	}
+	if got[0].Line != 3 {
+		t.Errorf("first warning line = %d, want 3 (the studioPath mount option)", got[0].Line)
+	}
+}
+
+func TestScanStudioMountFlagsOldConfigKeys(t *testing.T) {
+	cfg := `export default {
+  studio: {
+    enabled: true,
+    path: '/studio',
+    structure,
+  },
+}`
+	got := ScanStudioMount("trokky.config.ts", cfg)
+	if len(got) != 2 {
+		t.Fatalf("expected the removed-keys warning and the structure warning, got %d: %+v", len(got), got)
+	}
+	if !strings.Contains(got[0].Message, "enabled/path/requireAuth/apiUrl") || !strings.Contains(got[1].Message, "top level") {
+		t.Errorf("unexpected messages: %+v", got)
+	}
+}
+
+func TestScanStudioMountIsQuietOnTheNewShape(t *testing.T) {
+	src := `import { studioRouter } from '@trokky/studio/express'
+server.app.use('/studio', studioRouter({ apiPath: '/api' }))
+export default { structure, studio: { branding: { title: 'CMS' } } }
+`
+	if got := ScanStudioMount("server.ts", src); len(got) != 0 {
+		t.Errorf("new shape must not warn: %+v", got)
 	}
 }

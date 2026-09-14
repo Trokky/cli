@@ -15,8 +15,8 @@ import (
 // look at. Everything here comes from a text scan of the sources: we never
 // execute or type-check the project.
 type Warning struct {
-	// Kind is one of "internal-import", "astro-env", "singleton-divergence"
-	// or "singleton-near-miss".
+	// Kind is one of "internal-import", "astro-env", "singleton-divergence",
+	// "singleton-near-miss" or "studio-mount".
 	Kind string
 	// File is relative to the scanned root, slash-separated. It is empty when
 	// the warning is not tied to a file.
@@ -499,6 +499,51 @@ func warnIsSchemaFile(rel, src string) bool {
 // ScanWarnings walks root and returns every warning found, sorted by file and
 // line. Skipped directories (node_modules, .git, dist, build, .astro) and
 // symlinks are not visited.
+// ---------------------------------------------------------------------------
+// studio mounting (Trokky 3.0)
+// ---------------------------------------------------------------------------
+
+// studioMountPatterns are the pre-3.0 ways a project told the server to serve the
+// Studio. Since 3.0 the server refuses them at boot, so they are reported here
+// with the replacement rather than rewritten: the fix is two lines in the server
+// file whose right place (before the site's own catch-all) a text rewrite cannot
+// know.
+var studioMountPatterns = []struct {
+	re      *regexp.Regexp
+	message string
+}{
+	{regexp.MustCompile(`studioPath\s*:`),
+		"mount() no longer takes studioPath. Mount the Studio yourself: import { studioRouter } from '@trokky/studio/express' and app.use('/studio', studioRouter({ apiPath: '/api' })) before any catch-all"},
+	{regexp.MustCompile(`getMountedStudioPath\s*\(`),
+		"getMountedStudioPath() is gone; the Studio path is wherever you app.use() studioRouter()"},
+	{regexp.MustCompile(`\.\s*studioPath\b`),
+		"getInfo()/getMountedPaths() no longer report studioPath; keep your own constant for the mount path"},
+	{regexp.MustCompile(`studio\s*:\s*\{[^}]*\b(enabled|path|requireAuth|apiUrl)\s*:`),
+		"the studio config block may only hold branding, fields, settings and session; remove enabled/path/requireAuth/apiUrl (serving the Studio is server.ts's job now)"},
+	{regexp.MustCompile(`studio\s*:\s*\{[^}]*\bstructure\b`),
+		"move structure out of the studio block to the top level of the config: the server enforces singletons from it"},
+	{regexp.MustCompile(`@trokky/studio/dist/server/assets\.js`),
+		"'@trokky/studio/dist/server/assets.js' is no longer exported; use studioRouter() from '@trokky/studio/express'"},
+}
+
+// ScanStudioMount reports every pre-3.0 Studio mounting idiom in src.
+func ScanStudioMount(rel, src string) []Warning {
+	var out []Warning
+	for _, p := range studioMountPatterns {
+		loc := p.re.FindStringIndex(src)
+		if loc == nil {
+			continue
+		}
+		out = append(out, Warning{
+			Kind:    "studio-mount",
+			File:    rel,
+			Line:    1 + strings.Count(src[:loc[0]], "\n"),
+			Message: p.message,
+		})
+	}
+	return out
+}
+
 // ScanSummary records what the singleton check actually examined, so that a clean run can
 // be told apart from a run that found nothing to look at. Reporting only "no warnings" makes
 // those two identical, and the second one loses documents on restore.
@@ -550,6 +595,7 @@ func ScanWarningsSummary(root string) ([]Warning, ScanSummary, error) {
 		src := string(data)
 
 		out = append(out, ScanInternalImports(rel, src)...)
+		out = append(out, ScanStudioMount(rel, src)...)
 		if astro {
 			out = append(out, ScanAstroEnv(rel, src)...)
 		}

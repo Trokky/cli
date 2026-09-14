@@ -7,12 +7,15 @@ import (
 )
 
 // GeneratePackageJSON generates package.json based on project config.
+// TrokkyVersion is the range every generated project pins the @trokky packages to.
+const TrokkyVersion = "^3.0.0"
+
 func GeneratePackageJSON(cfg ProjectConfig) string {
-	// Trokky v2 ships the server, mail, i18n and all adapters in the single
+	// Trokky ships the server, mail, i18n and all adapters in the single
 	// `trokky` package; adapters are enabled via side-effect imports.
 	deps := map[string]string{
-		"@trokky/trokky": "^2.0.0",
-		"@trokky/client": "^2.0.0",
+		"@trokky/trokky": TrokkyVersion,
+		"@trokky/client": TrokkyVersion,
 		"express":        "^4.18.2",
 		"dotenv":         "^16.3.1",
 		"sharp":          "^0.33.0",
@@ -24,7 +27,7 @@ func GeneratePackageJSON(cfg ProjectConfig) string {
 	}
 
 	if cfg.Studio != StudioNone {
-		deps["@trokky/studio"] = "^2.0.0"
+		deps["@trokky/studio"] = TrokkyVersion
 	}
 
 	pkg := map[string]interface{}{
@@ -59,12 +62,21 @@ func GenerateServerTS(cfg ProjectConfig) string {
 		dataAdapterImport = "import '@trokky/trokky/adapters/postgres-data'"
 	}
 
-	// Studio is only mounted when the project embeds or proxies it.
+	// Studio is a router the site mounts itself (since Trokky 3.0). Only an
+	// embedded Studio is mounted here; a separate deployment serves its own.
+	studioImport := ""
 	studioMount := ""
 	studioLog := ""
+	studioConfig := ""
+	structureConfig := ""
 	if cfg.Studio != StudioNone {
-		studioMount = "\n      studioPath: '/studio',"
-		studioLog = fmt.Sprintf("\n      console.log(%sStudio: http://localhost:${port}${paths.studioPath}%s)", bt, bt)
+		structureConfig = "\n\n      // Navigation structure (the server enforces singletons from it)\n      structure: trokkyConfig.structure,"
+		studioConfig = "\n\n      // What the Studio reads over the API (branding, settings, session)\n      studio: trokkyConfig.studio,"
+	}
+	if cfg.Studio == StudioEmbedded {
+		studioImport = "\nimport { studioRouter } from '@trokky/studio/express'"
+		studioMount = "\n\n    // Studio: mount it before any catch-all of your own.\n    const studioPath = '/studio'\n    app.use(studioPath, studioRouter({ apiPath: paths.apiPath, branding: trokkyConfig.studio?.branding }))"
+		studioLog = fmt.Sprintf("\n      console.log(%sStudio: http://localhost:${port}${studioPath}%s)", bt, bt)
 	}
 
 	// Optional config sections are only forwarded when trokky.config.ts declares
@@ -90,7 +102,7 @@ func GenerateServerTS(cfg ProjectConfig) string {
  */
 
 import express, { type Express } from 'express'
-import { TrokkyExpress } from '@trokky/trokky/express'
+import { TrokkyExpress } from '@trokky/trokky/express'%s
 %s
 import '@trokky/trokky/adapters/filesystem-media'
 import trokkyConfig from './trokky.config.js'
@@ -114,17 +126,12 @@ async function startServer() {
       security: trokkyConfig.security,
 
       // HTTP server options
-      server: trokkyConfig.server,
-
-      // Studio integration
-      studio: trokkyConfig.studio,%s
+      server: trokkyConfig.server,%s%s%s
     })
 
-    trokky.mount(app, {
-      apiPath: '/api',%s
-    })
+    trokky.mount(app, { apiPath: '/api' })
 
-    const paths = trokky.getMountedPaths()
+    const paths = trokky.getMountedPaths()%s
 
     app.get('/health', (_req, res) => {
       res.json({
@@ -150,7 +157,7 @@ startServer().catch(error => {
   console.error('Server startup failed:', error)
   process.exit(1)
 })
-`, cfg.Name, dataAdapterImport, extraOptions, studioMount,
+`, cfg.Name, studioImport, dataAdapterImport, structureConfig, studioConfig, extraOptions, studioMount,
 		bt, cfg.Name, bt, bt, bt, bt, bt, studioLog, bt, bt, cfg.Name)
 }
 
@@ -265,30 +272,18 @@ const mailFromName = process.env.EMAIL_FROM_NAME || '%s'
   } : undefined,`
 	}
 
-	// Studio config
+	// Structure (a core concern: singleton enforcement reads it) and the Studio
+	// config the UI fetches over the API. Where the Studio is served is decided
+	// in server.ts, not here.
 	structureImport := ""
 	studioConfig := ""
-	if cfg.Studio == StudioEmbedded {
+	if cfg.Studio != StudioNone {
 		structureImport = "import { structure } from './structure.js'"
-		studioConfig = `
+		studioConfig = fmt.Sprintf(`
+  structure,
   studio: {
-    enabled: true,
-    path: '/studio',
-    structure,
-  },`
-	} else if cfg.Studio == StudioSeparate {
-		structureImport = "import { structure } from './structure.js'"
-		studioConfig = `
-  studio: {
-    enabled: false,
-    apiUrl: process.env.API_URL,
-    structure,
-  },`
-	} else {
-		studioConfig = `
-  studio: {
-    enabled: false,
-  },`
+    branding: { title: %q },
+  },`, cfg.Name)
 	}
 
 	// i18n config
@@ -622,4 +617,3 @@ export const schemas = [
 ]
 `
 }
-

@@ -14,7 +14,7 @@ import (
 func newMigrateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "migrate",
-		Short: "Upgrade a Trokky project from v0.1.x packages to v2",
+		Short: "Upgrade a Trokky project to the current packages (v0.1.x split packages, or a pre-3.0 Studio mount)",
 		Long: `Rewrite a Trokky site project from the old split v0.1.x npm packages to the
 consolidated v2 packages.
 
@@ -25,13 +25,18 @@ project's JS/TS/Astro sources (@trokky/core -> @trokky/trokky,
 @trokky/trokky/adapters/*, @trokky/mail-adapter-* -> @trokky/trokky/mail/*,
 @trokky/fields -> @trokky/studio, ...) and updates the dependency sections of
 every package.json, pinning @trokky/trokky, @trokky/studio and @trokky/client
-to ^2.0.0. node_modules, dist, build, .git, .astro and symlinks are never
+to ^3.0.0. node_modules, dist, build, .git, .astro and symlinks are never
 touched.
 
-It also reports what it cannot fix by itself: imports of package internals,
-Astro's build-time inlining of import.meta.env.TROKKY_API_URL, and — most
-importantly — structure entries marked type: 'singleton' whose schema does not
-set singleton: true. That divergence is a data-loss trap: 'trokky restore'
+It also reports what it cannot fix by itself: the pre-3.0 Studio mounting
+(studio.enabled/path/structure in the config, studioPath in mount(), the
+dist/server/assets.js import), which since 3.0 the server refuses at boot and
+which is replaced by two lines in server.ts — import { studioRouter } from
+'@trokky/studio/express' and app.use('/studio', studioRouter({ apiPath: '/api' }))
+placed before your own catch-all; imports of package internals; Astro's
+build-time inlining of import.meta.env.TROKKY_API_URL; and — most importantly —
+structure entries marked type: 'singleton' whose schema does not set
+singleton: true. That divergence is a data-loss trap: 'trokky restore'
 POSTs such a document instead of doing an id-preserving PUT, which regenerates
 the document id and orphans the structure entry. Fix those warnings before you
 restore into the migrated site.

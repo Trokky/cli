@@ -8,8 +8,8 @@ import (
 	"strings"
 )
 
-// TargetVersion is the version range the consolidated v2 packages are pinned to.
-const TargetVersion = "^2.0.0"
+// TargetVersion is the version range the consolidated packages are pinned to.
+const TargetVersion = "^3.0.0"
 
 // consolidatedPackages are the packages that survive into v2 and must be moved
 // to TargetVersion wherever they appear.
