@@ -424,6 +424,14 @@ func TestScanStudioMountFlagsOldConfigKeys(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected the removed-keys warning and the structure warning, got %d: %+v", len(got), got)
 	}
+	nested := ScanStudioMount("trokky.config.ts", "studio: {\n  enabled: true,\n  branding: { title: 'X', theme: 'light' },\n  structure: fucecStructure,\n}")
+	if len(nested) != 2 {
+		t.Errorf("a branding block before structure must not hide it: %+v", nested)
+	}
+	dead := ScanStudioMount("trokky.config.ts", "studio: {\n  branding: {},\n  settings: { pageSize: 20 },\n}")
+	if len(dead) != 1 || !strings.Contains(dead[0].Message, "ignored since 3.1") {
+		t.Errorf("expected the dead-keys warning alone, got %+v", dead)
+	}
 	if !strings.Contains(got[0].Message, "enabled/path/requireAuth/apiUrl") || !strings.Contains(got[1].Message, "top level") {
 		t.Errorf("unexpected messages: %+v", got)
 	}
@@ -432,7 +440,7 @@ func TestScanStudioMountFlagsOldConfigKeys(t *testing.T) {
 func TestScanStudioMountIsQuietOnTheNewShape(t *testing.T) {
 	src := `import { studioRouter } from '@trokky/studio/express'
 server.app.use('/studio', studioRouter({ apiPath: '/api' }))
-export default { structure, studio: { branding: { title: 'CMS' } } }
+export default { structure, studio: { url: process.env.STUDIO_URL, branding: { title: 'CMS' } } }
 `
 	if got := ScanStudioMount("server.ts", src); len(got) != 0 {
 		t.Errorf("new shape must not warn: %+v", got)

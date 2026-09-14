@@ -169,6 +169,9 @@ func TestScaffoldTemplates(t *testing.T) {
 			if cfg.Studio != StudioEmbedded && hasRouter {
 				t.Errorf("server.ts mounts studioRouter for studio=%s:\n%s", cfg.Studio, server)
 			}
+			if cfg.Studio != StudioNone && !strings.Contains(files["scaffold:trokky.config.ts"], "url: process.env.STUDIO_URL") {
+				t.Errorf("trokky.config.ts studio block lacks url: process.env.STUDIO_URL:\n%s", files["scaffold:trokky.config.ts"])
+			}
 			if cfg.Studio != StudioNone && !strings.Contains(server, "structure: trokkyConfig.structure") {
 				t.Errorf("server.ts does not forward the top-level structure:\n%s", server)
 			}
