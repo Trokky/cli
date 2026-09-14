@@ -119,8 +119,8 @@ func TestScaffoldTemplates(t *testing.T) {
 
 			// (b) package.json pins the v2 packages
 			pkg := files["scaffold:package.json"]
-			if !strings.Contains(pkg, `"@trokky/trokky": "^2.0.0"`) {
-				t.Errorf("package.json missing trokky ^2.0.0:\n%s", pkg)
+			if !strings.Contains(pkg, `"@trokky/trokky": "`+TrokkyVersion+`"`) {
+				t.Errorf("package.json missing trokky %s:\n%s", TrokkyVersion, pkg)
 			}
 			if !strings.Contains(pkg, "@trokky/client") {
 				t.Errorf("package.json missing @trokky/client:\n%s", pkg)
@@ -158,11 +158,30 @@ func TestScaffoldTemplates(t *testing.T) {
 				t.Errorf("server.ts has wrong data adapter import %q:\n%s", unwantData, server)
 			}
 
-			if cfg.Studio == StudioNone && strings.Contains(server, "studioPath:") {
-				t.Errorf("server.ts mounts studio for studio=none:\n%s", server)
+			// Since 3.0 the site mounts Studio itself; the server never takes a studioPath.
+			if strings.Contains(server, "studioPath:") || strings.Contains(server, "studio.enabled") {
+				t.Errorf("server.ts uses the pre-3.0 studio mounting:\n%s", server)
 			}
-			if cfg.Studio != StudioNone && !strings.Contains(server, "studioPath: '/studio'") {
-				t.Errorf("server.ts missing studio mount:\n%s", server)
+			hasRouter := strings.Contains(server, "from '@trokky/studio/express'") && strings.Contains(server, "app.use(studioPath, studioRouter(")
+			if cfg.Studio == StudioEmbedded && !hasRouter {
+				t.Errorf("server.ts does not mount studioRouter for an embedded studio:\n%s", server)
+			}
+			if cfg.Studio != StudioEmbedded && hasRouter {
+				t.Errorf("server.ts mounts studioRouter for studio=%s:\n%s", cfg.Studio, server)
+			}
+			if cfg.Studio != StudioNone && !strings.Contains(server, "structure: trokkyConfig.structure") {
+				t.Errorf("server.ts does not forward the top-level structure:\n%s", server)
+			}
+			// Only the studio block itself may not carry the removed keys; other
+			// sections legitimately use "enabled:".
+			if cfgText := files["scaffold:trokky.config.ts"]; strings.Contains(cfgText, "studio: {") {
+				block := cfgText[strings.Index(cfgText, "studio: {"):]
+				block = block[:strings.Index(block, "},")+2]
+				for _, old := range []string{"enabled:", "path:", "requireAuth:", "apiUrl:", "structure,"} {
+					if strings.Contains(block, old) {
+						t.Errorf("trokky.config.ts studio block still has pre-3.0 key %q:\n%s", old, block)
+					}
+				}
 			}
 
 			// trokky.config.ts uses the v2 type import
@@ -209,11 +228,11 @@ func TestGeneratePackageJSONIsValidJSON(t *testing.T) {
 			if out.Name != cfg.Name {
 				t.Errorf("package.json name = %q, want %q", out.Name, cfg.Name)
 			}
-			if out.Dependencies["@trokky/trokky"] != "^2.0.0" {
-				t.Errorf("dependencies.@trokky/trokky = %q, want ^2.0.0", out.Dependencies["@trokky/trokky"])
+			if out.Dependencies["@trokky/trokky"] != TrokkyVersion {
+				t.Errorf("dependencies.@trokky/trokky = %q, want %s", out.Dependencies["@trokky/trokky"], TrokkyVersion)
 			}
-			if out.Dependencies["@trokky/client"] != "^2.0.0" {
-				t.Errorf("dependencies[@trokky/client] = %q, want ^2.0.0", out.Dependencies["@trokky/client"])
+			if out.Dependencies["@trokky/client"] != TrokkyVersion {
+				t.Errorf("dependencies[@trokky/client] = %q, want %s", out.Dependencies["@trokky/client"], TrokkyVersion)
 			}
 		})
 	}

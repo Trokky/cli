@@ -191,9 +191,9 @@ func TestE2EWrite(t *testing.T) {
 		t.Fatalf("rewritten package.json is not valid JSON: %v\n%s", err, pkgSrc)
 	}
 	wantDeps := map[string]string{
-		"@trokky/trokky": "^2.0.0",
-		"@trokky/studio": "^2.0.0",
-		"@trokky/client": "^2.0.0",
+		"@trokky/trokky": "^3.0.0",
+		"@trokky/studio": "^3.0.0",
+		"@trokky/client": "^3.0.0",
 		"express":        "^4.19.0",
 	}
 	for k, v := range wantDeps {
@@ -217,7 +217,7 @@ func TestE2EWrite(t *testing.T) {
 		strings.Index(pkgSrc, `"scripts"`), strings.Index(pkgSrc, `"dependencies"`); !(i < j && j < k && k < d) {
 		t.Errorf("key order changed (name=%d type=%d scripts=%d dependencies=%d):\n%s", i, j, k, d, pkgSrc)
 	}
-	if !strings.Contains(pkgSrc, "\n    \"@trokky/trokky\": \"^2.0.0\",") {
+	if !strings.Contains(pkgSrc, "\n    \"@trokky/trokky\": \"^3.0.0\",") {
 		t.Errorf("2-space indentation was not preserved:\n%s", pkgSrc)
 	}
 

@@ -186,8 +186,8 @@ export const app = createTrokky({ adapter: filesystemData(), mail: mailConsole()
 	wantPkg := `{
   "name": "site",
   "dependencies": {
-    "@trokky/trokky": "^2.0.0",
-    "@trokky/studio": "^2.0.0",
+    "@trokky/trokky": "^3.0.0",
+    "@trokky/studio": "^3.0.0",
     "express": "^4.19.2"
   }
 }
@@ -269,7 +269,7 @@ func TestResultReport(t *testing.T) {
 	res := &Result{
 		Files: []FileChange{
 			{Path: "src/server.ts", Kind: KindSource, Hits: map[string]int{"@trokky/core": 2, "@trokky/express": 1}},
-			{Path: "package.json", Kind: KindPackageJSON, Changes: []string{"removed @trokky/core", "added @trokky/trokky ^2.0.0"}},
+			{Path: "package.json", Kind: KindPackageJSON, Changes: []string{"removed @trokky/core", "added @trokky/trokky ^3.0.0"}},
 		},
 		Hits:    map[string]int{"@trokky/core": 2, "@trokky/express": 1},
 		Scanned: 2,
@@ -287,7 +287,7 @@ func TestResultReport(t *testing.T) {
 		"src/server.ts",
 		"@trokky/express x1, @trokky/core x2",
 		"package.json",
-		"removed @trokky/core, added @trokky/trokky ^2.0.0",
+		"removed @trokky/core, added @trokky/trokky ^3.0.0",
 		"Specifiers rewritten by mapping:",
 		"@trokky/express",
 		"-> @trokky/trokky",
