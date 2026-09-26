@@ -16,8 +16,10 @@ import (
 )
 
 const (
-	ClientID      = "trokky-cli"
-	DefaultScopes = "openid profile content:read content:write content:delete media:read media:write offline_access"
+	ClientID = "trokky-cli"
+	// content:publish and media:delete are needed by restore (published documents) and by
+	// clean; servers before 3.5.2 ignore scopes they do not know
+	DefaultScopes = "openid profile content:read content:write content:delete content:publish media:read media:write media:delete offline_access"
 
 	deviceAuthPath = "/auth/device"
 	tokenPath      = "/auth/token"
@@ -197,10 +199,54 @@ type TokenRefreshResult struct {
 	ExpiresAt      string
 	Error          string
 	RequiresReauth bool
+	// The rotated refresh token, if the server sent one; stored by RefreshAccessToken
+	newRefreshToken string
 }
 
 // RefreshAccessToken refreshes an OAuth2 token using a refresh token.
+//
+// The refresh happens under the config lock, against the instance as it is stored now: the
+// Trokky MCP server shares this file and may have refreshed the same instance a moment ago.
+// If the stored token is already fresh, it is used as is and no request is made.
 func RefreshAccessToken(instanceName string, instance config.InstanceConfig) TokenRefreshResult {
+	var result TokenRefreshResult
+	err := config.Update(func(cfg *config.Config) error {
+		current, ok := cfg.Instances[instanceName]
+		if !ok {
+			current = instance
+		}
+		// Changed since this process read it and usable as it stands: renewed by the MCP server,
+		// or replaced by a new login or an API token
+		changed := current.Token != instance.Token
+		usable := current.AuthType != config.AuthTypeOAuth2 || current.TokenExpiresAt == "" || !IsTokenExpired(current.TokenExpiresAt, 0)
+		if changed && usable {
+			result = TokenRefreshResult{Success: true, Token: current.Token, ExpiresAt: current.TokenExpiresAt}
+			return nil
+		}
+
+		result = requestRefresh(current)
+		if !result.Success || !ok {
+			return nil
+		}
+		current.Token = result.Token
+		current.TokenExpiresAt = result.ExpiresAt
+		if result.newRefreshToken != "" {
+			current.RefreshToken = result.newRefreshToken
+		}
+		current.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		cfg.Instances[instanceName] = current
+		return nil
+	})
+	if err != nil && result.Success {
+		result.Error = fmt.Sprintf("token refreshed but failed to save config: %v", err)
+	} else if err != nil {
+		result = TokenRefreshResult{Error: err.Error()}
+	}
+	return result
+}
+
+// requestRefresh exchanges the instance's refresh token for a new access token.
+func requestRefresh(instance config.InstanceConfig) TokenRefreshResult {
 	if instance.RefreshToken == "" {
 		return TokenRefreshResult{Error: "no refresh token available", RequiresReauth: true}
 	}
@@ -210,10 +256,14 @@ func RefreshAccessToken(instanceName string, instance config.InstanceConfig) Tok
 
 	endpoint := strings.TrimRight(instance.URL, "/") + tokenPath
 
+	clientID := instance.ClientID
+	if clientID == "" {
+		clientID = ClientID
+	}
 	body, _ := json.Marshal(map[string]string{
 		"grant_type":    "refresh_token",
 		"refresh_token": instance.RefreshToken,
-		"client_id":     ClientID,
+		"client_id":     clientID,
 	})
 
 	resp, err := httpClient.Post(endpoint, "application/json", bytes.NewReader(body))
@@ -237,31 +287,12 @@ func RefreshAccessToken(instanceName string, instance config.InstanceConfig) Tok
 		return TokenRefreshResult{Error: fmt.Sprintf("invalid refresh response: %v", err), RequiresReauth: false}
 	}
 
-	expiresAt := ExpiresAtFromNow(tokenResp.ExpiresIn)
-
-	// Update stored config
-	cfg, err := config.Load()
-	if err == nil {
-		if inst, ok := cfg.Instances[instanceName]; ok {
-			inst.Token = tokenResp.AccessToken
-			inst.TokenExpiresAt = expiresAt
-			if tokenResp.RefreshToken != "" {
-				inst.RefreshToken = tokenResp.RefreshToken
-			}
-			inst.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-			cfg.Instances[instanceName] = inst
-			if saveErr := config.Save(cfg); saveErr != nil {
-				return TokenRefreshResult{
-					Success:   true,
-					Token:     tokenResp.AccessToken,
-					ExpiresAt: expiresAt,
-					Error:     fmt.Sprintf("token refreshed but failed to save config: %v", saveErr),
-				}
-			}
-		}
+	return TokenRefreshResult{
+		Success:         true,
+		Token:           tokenResp.AccessToken,
+		ExpiresAt:       ExpiresAtFromNow(tokenResp.ExpiresIn),
+		newRefreshToken: tokenResp.RefreshToken,
 	}
-
-	return TokenRefreshResult{Success: true, Token: tokenResp.AccessToken, ExpiresAt: expiresAt}
 }
 
 // GetValidToken returns a valid token, refreshing if necessary.
@@ -284,7 +315,8 @@ func GetValidToken(instanceName string, instance config.InstanceConfig) (token s
 			instanceName, instance.URL)
 	}
 
-	return instance.Token, false, nil
+	// The token is expired: sending it anyway would only come back as a confusing 401
+	return "", false, fmt.Errorf("could not renew the session for instance %q: %s", instanceName, result.Error)
 }
 
 // DeriveInstanceName derives a short name from a URL.

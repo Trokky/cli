@@ -126,6 +126,7 @@ Or use --dry-run to preview what would be deleted first.
 		}
 
 		// Clean media (paginated, with rate-limit handling)
+		mediaStuck := 0
 		if !documentsOnly {
 			fmt.Print("Cleaning media files...\n")
 
@@ -158,6 +159,7 @@ Or use --dry-run to preview what would be deleted first.
 				}
 
 				totalMediaCount += len(mediaItems)
+				deletedBefore := totalMediaDeleted
 				for _, item := range mediaItems {
 					if dryRun {
 						continue
@@ -180,6 +182,14 @@ Or use --dry-run to preview what would be deleted first.
 				}
 
 				fmt.Printf("  Deleted %d media file(s) so far...\n", totalMediaDeleted)
+
+				// The listing always returns the first page, so a page in which nothing could be
+				// deleted would come back unchanged forever
+				if totalMediaDeleted == deletedBefore {
+					mediaStuck = len(mediaItems)
+					fmt.Fprintf(os.Stderr, "  Stopping: none of these %d media file(s) could be deleted. The token may lack media:delete; run 'trokky login' again with a current CLI.\n", len(mediaItems))
+					break
+				}
 			}
 
 			if totalMediaDeleted > 0 || totalMediaCount == 0 {
@@ -206,6 +216,9 @@ Or use --dry-run to preview what would be deleted first.
 		fmt.Printf("Mode:            %s\n", mode)
 		fmt.Println("──────────────────────────────────────────────────")
 
+		if mediaStuck > 0 {
+			return fmt.Errorf("%d media file(s) could not be deleted", mediaStuck)
+		}
 		return nil
 	},
 }

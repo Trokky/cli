@@ -472,3 +472,85 @@ func TestDeriveInstanceName(t *testing.T) {
 		}
 	}
 }
+
+func TestRefreshAccessToken_UsesATokenAnotherProcessAlreadyRefreshed(t *testing.T) {
+	overrideHome(t)
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		json.NewEncoder(w).Encode(TokenResponse{AccessToken: "from-network", ExpiresIn: 3600})
+	}))
+	defer server.Close()
+
+	stale := cfg.InstanceConfig{URL: server.URL, Token: "old", RefreshToken: "r", AuthType: cfg.AuthTypeOAuth2,
+		TokenExpiresAt: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)}
+	// What the MCP server wrote while this process held the stale copy
+	fresh := stale
+	fresh.Token = "refreshed-elsewhere"
+	fresh.TokenExpiresAt = time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+	cfg.AddInstance("test", fresh, true)
+
+	result := RefreshAccessToken("test", stale)
+	if !result.Success || result.Token != "refreshed-elsewhere" {
+		t.Fatalf("got %+v, want the token already in the config", result)
+	}
+	if requests != 0 {
+		t.Fatalf("made %d refresh requests, want none", requests)
+	}
+}
+
+func TestRefreshAccessToken_UsesTheStoredRefreshTokenAndClient(t *testing.T) {
+	overrideHome(t)
+	var got map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&got)
+		json.NewEncoder(w).Encode(TokenResponse{AccessToken: "new", RefreshToken: "rotated", ExpiresIn: 3600})
+	}))
+	defer server.Close()
+
+	expired := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	// The MCP server rotated the refresh token after this process read the instance
+	cfg.AddInstance("s", cfg.InstanceConfig{URL: server.URL, Token: "old", RefreshToken: "current-refresh",
+		AuthType: cfg.AuthTypeOAuth2, TokenExpiresAt: expired, ClientID: "trokky-mcp"}, true)
+	staleCopy := cfg.InstanceConfig{URL: server.URL, Token: "old", RefreshToken: "outdated-refresh",
+		AuthType: cfg.AuthTypeOAuth2, TokenExpiresAt: expired, ClientID: "trokky-mcp"}
+
+	result := RefreshAccessToken("s", staleCopy)
+	if !result.Success || result.Token != "new" {
+		t.Fatalf("got %+v", result)
+	}
+	if got["refresh_token"] != "current-refresh" || got["client_id"] != "trokky-mcp" {
+		t.Fatalf("refresh sent %v, want the stored refresh token and the site's own client", got)
+	}
+	inst, _ := cfg.GetInstance("s")
+	if inst.Token != "new" || inst.RefreshToken != "rotated" {
+		t.Fatalf("stored %+v, want the new token and the rotated refresh token", inst)
+	}
+}
+
+func TestRefreshAccessToken_DoesNotReuseAnExpiredToken(t *testing.T) {
+	overrideHome(t)
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		json.NewEncoder(w).Encode(TokenResponse{AccessToken: "new", ExpiresIn: 3600})
+	}))
+	defer server.Close()
+	expired := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	cfg.AddInstance("s", cfg.InstanceConfig{URL: server.URL, Token: "other-but-expired", RefreshToken: "r",
+		AuthType: cfg.AuthTypeOAuth2, TokenExpiresAt: expired}, true)
+
+	result := RefreshAccessToken("s", cfg.InstanceConfig{URL: server.URL, Token: "old", RefreshToken: "r",
+		AuthType: cfg.AuthTypeOAuth2, TokenExpiresAt: expired})
+	if result.Token != "new" || requests != 1 {
+		t.Fatalf("got %+v after %d requests, want a real refresh", result, requests)
+	}
+}
+
+func TestDefaultScopesCoverRestoreAndClean(t *testing.T) {
+	for _, scope := range []string{"content:publish", "media:delete", "offline_access"} {
+		if !strings.Contains(" "+DefaultScopes+" ", " "+scope+" ") {
+			t.Errorf("DefaultScopes lacks %s", scope)
+		}
+	}
+}

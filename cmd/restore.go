@@ -229,6 +229,7 @@ Example:
 				if json.Unmarshal(mediaData, &mediaItems) != nil || len(mediaItems) == 0 {
 					break
 				}
+				deletedBefore := deletedMedia
 				for _, item := range mediaItems {
 					for attempt := 1; attempt <= 3; attempt++ {
 						_, err := c.Delete("/media/" + item.ID)
@@ -243,6 +244,13 @@ Example:
 					time.Sleep(100 * time.Millisecond)
 				}
 				fmt.Fprintf(out, "\r  Cleaning existing media... %d deleted", deletedMedia)
+
+				// The listing always returns the first page: if nothing on it could be deleted,
+				// it would come back unchanged forever
+				if deletedMedia == deletedBefore {
+					fmt.Fprintln(out)
+					return fmt.Errorf("could not delete existing media (%d file(s) refused); the token may lack media:delete: run 'trokky login' again with a current CLI, or restore without --clean", len(mediaItems))
+				}
 			}
 			fmt.Fprintf(out, "\r  Cleaning existing media... %d file(s) deleted\n", deletedMedia)
 		}

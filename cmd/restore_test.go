@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // recorder captures every request a fake Trokky instance receives so a test can
@@ -604,5 +605,48 @@ func TestRestoreReadsLegacyFlatLayoutAndWarnsOnCollisions(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "Take a fresh backup") {
 		t.Errorf("warning should tell the user how to get an uncorrupted archive:\n%s", stderr)
+	}
+}
+
+// With --clean and a token that may list media but not delete it, the media listing keeps
+// returning the same first page. The restore must stop with an error instead of looping.
+func TestRestoreCleanStopsWhenMediaCannotBeDeleted(t *testing.T) {
+	rec := &recorder{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.record(r)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && apiPath(r) == "/collections":
+			io.WriteString(w, testCollectionsResponse)
+		case r.Method == http.MethodGet && strings.HasPrefix(apiPath(r), "/collections/"):
+			io.WriteString(w, `{"success":true,"data":{"documents":[]}}`)
+		case r.Method == http.MethodGet && apiPath(r) == "/media":
+			io.WriteString(w, `{"success":true,"data":[{"id":"m1"},{"id":"m2"}]}`)
+		case r.Method == http.MethodDelete && strings.HasPrefix(apiPath(r), "/media/"):
+			w.WriteHeader(http.StatusForbidden)
+			io.WriteString(w, `{"success":false,"error":{"message":"Insufficient permissions: media:delete required"}}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			io.WriteString(w, `{"success":false}`)
+		}
+	}))
+	defer server.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := runRestore(t, "--input", writeBackupZip(t), "--url", server.URL+"/api", "--token", "t", "--clean", "-q")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "could not delete existing media") {
+			t.Fatalf("err = %v, want the media cleanup failure", err)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("restore --clean did not stop; it loops on media it cannot delete")
+	}
+	if n := rec.countPath("/media"); n != 1 {
+		t.Errorf("listed media %d times, want 1", n)
 	}
 }

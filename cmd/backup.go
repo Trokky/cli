@@ -144,6 +144,8 @@ Example:
 			mediaData, err := c.Get("/media?limit=10000")
 			if err != nil {
 				fmt.Printf("failed: %v\n", err)
+				// A backup without its media is not a backup; say so instead of exiting 0
+				return fmt.Errorf("could not list media (%v); the token may lack media:read. Use --skip-media to back up documents only", err)
 			} else {
 				var mediaItems []struct {
 					ID       string `json:"id"`
