@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/trokky/cli/internal/config"
+	"github.com/trokky/cli/internal/useragent"
 )
 
 const (
@@ -25,7 +26,7 @@ const (
 	tokenPath      = "/auth/token"
 )
 
-var httpClient = &http.Client{Timeout: 30 * time.Second}
+var httpClient = &http.Client{Timeout: 30 * time.Second, Transport: useragent.Transport(nil)}
 
 // DeviceAuthResponse is returned by the device authorization endpoint.
 type DeviceAuthResponse struct {
@@ -311,7 +312,7 @@ func (e *RevokeRefusedError) Error() string {
 
 // revokeClient is short on patience: revoking is a courtesy on the way out, and a hanging
 // instance must not hold up a logout for long.
-var revokeClient = &http.Client{Timeout: 10 * time.Second}
+var revokeClient = &http.Client{Timeout: 10 * time.Second, Transport: useragent.Transport(nil)}
 
 // RevokeToken ends the instance's sign-in on the server (RFC 7009), so the approval also
 // disappears from the instance's connected applications. The refresh token is revoked when

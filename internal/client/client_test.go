@@ -747,3 +747,17 @@ func TestRequest_Unauthorized_AddsTheSignInHint(t *testing.T) {
 		t.Fatalf("an API token gets no sign-in hint: %v", err)
 	}
 }
+
+func TestRequestsNameTheCLI(t *testing.T) {
+	var got string
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		got = r.UserAgent()
+		w.Write([]byte(`{"success":true,"data":{}}`))
+	})
+	if _, err := New(server.URL, "t").Get("/health"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(got, "trokky-cli/") {
+		t.Fatalf("User-Agent = %q", got)
+	}
+}

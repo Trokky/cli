@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/trokky/cli/internal/useragent"
 )
 
 var (
@@ -24,6 +25,7 @@ var rootCmd = &cobra.Command{
 }
 
 func Execute() {
+	useragent.Version = version
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

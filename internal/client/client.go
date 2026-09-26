@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/trokky/cli/internal/auth"
 	"github.com/trokky/cli/internal/config"
+	"github.com/trokky/cli/internal/useragent"
 )
 
 type Client struct {
@@ -93,7 +94,7 @@ func New(baseURL, token string) *Client {
 	return &Client{
 		BaseURL:    strings.TrimRight(baseURL, "/"),
 		Token:      token,
-		HTTPClient: &http.Client{Timeout: 30 * time.Second},
+		HTTPClient: &http.Client{Timeout: 30 * time.Second, Transport: useragent.Transport(nil)},
 	}
 }
 

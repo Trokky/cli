@@ -618,3 +618,20 @@ func TestRevokeToken_ReportsAnUnreachableInstanceAsSuch(t *testing.T) {
 		t.Fatalf("err = %v, want a connection error", err)
 	}
 }
+
+// The instance records the User-Agent with the sign-in, for its connected applications
+func TestAuthRequestsNameTheCLI(t *testing.T) {
+	agents := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		agents <- r.UserAgent()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	_ = RevokeToken(cfg.InstanceConfig{URL: server.URL, Token: "t"})
+	_, _ = httpClient.Get(server.URL)
+	for i := 0; i < 2; i++ {
+		if got := <-agents; !strings.HasPrefix(got, "trokky-cli/") {
+			t.Fatalf("User-Agent = %q", got)
+		}
+	}
+}
