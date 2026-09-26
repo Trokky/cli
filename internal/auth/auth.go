@@ -299,6 +299,46 @@ func requestRefresh(instance config.InstanceConfig) TokenRefreshResult {
 	}
 }
 
+// RevokeRefusedError is a revocation the instance answered but did not accept, such as the
+// 404 of a server from before 3.5.2, which has no revocation endpoint.
+type RevokeRefusedError struct {
+	Status int
+}
+
+func (e *RevokeRefusedError) Error() string {
+	return fmt.Sprintf("the instance did not accept the revocation (HTTP %d)", e.Status)
+}
+
+// revokeClient is short on patience: revoking is a courtesy on the way out, and a hanging
+// instance must not hold up a logout for long.
+var revokeClient = &http.Client{Timeout: 10 * time.Second}
+
+// RevokeToken ends the instance's sign-in on the server (RFC 7009), so the approval also
+// disappears from the instance's connected applications. The refresh token is revoked when
+// there is one (it outlives the access token); a sign-in without offline access has only the
+// access token, which names the same approval. A refusal is a *RevokeRefusedError; any other
+// error means the instance could not be reached.
+func RevokeToken(instance config.InstanceConfig) error {
+	clientID := instance.ClientID
+	if clientID == "" {
+		clientID = ClientID
+	}
+	token := instance.RefreshToken
+	if token == "" {
+		token = instance.Token
+	}
+	body, _ := json.Marshal(map[string]string{"token": token, "client_id": clientID})
+	resp, err := revokeClient.Post(config.NormalizeBaseURL(instance.URL)+"/auth/revoke", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return &RevokeRefusedError{Status: resp.StatusCode}
+	}
+	return nil
+}
+
 // GetValidToken returns a valid token, refreshing if necessary.
 func GetValidToken(instanceName string, instance config.InstanceConfig) (token string, refreshed bool, err error) {
 	if instance.AuthType != config.AuthTypeOAuth2 || instance.TokenExpiresAt == "" {

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -553,5 +554,67 @@ func TestDefaultScopesCoverRestoreAndClean(t *testing.T) {
 		if !strings.Contains(" "+DefaultScopes+" ", " "+scope+" ") {
 			t.Errorf("DefaultScopes lacks %s", scope)
 		}
+	}
+}
+
+func revokeServer(t *testing.T, status int, got *map[string]string, path *string) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*path = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(got); err != nil {
+			t.Errorf("revocation body is not JSON: %v", err)
+		}
+		w.WriteHeader(status)
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestRevokeToken_SendsTheRefreshTokenWithItsClient(t *testing.T) {
+	var got map[string]string
+	var path string
+	server := revokeServer(t, http.StatusOK, &got, &path)
+
+	err := RevokeToken(cfg.InstanceConfig{URL: server.URL, Token: "a", RefreshToken: "r", AuthType: cfg.AuthTypeOAuth2, ClientID: "trokky-mcp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "/api/auth/revoke" || got["token"] != "r" || got["client_id"] != "trokky-mcp" {
+		t.Fatalf("sent %v to %s", got, path)
+	}
+}
+
+func TestRevokeToken_FallsBackToTheAccessTokenAndTheCLIClient(t *testing.T) {
+	var got map[string]string
+	var path string
+	server := revokeServer(t, http.StatusOK, &got, &path)
+
+	// A sign-in without offline access has no refresh token, and a login from before
+	// per-instance client ids has none recorded
+	if err := RevokeToken(cfg.InstanceConfig{URL: server.URL, Token: "a", AuthType: cfg.AuthTypeOAuth2}); err != nil {
+		t.Fatal(err)
+	}
+	if got["token"] != "a" || got["client_id"] != ClientID {
+		t.Fatalf("sent %v", got)
+	}
+}
+
+func TestRevokeToken_ReportsARefusalWithItsStatus(t *testing.T) {
+	var got map[string]string
+	var path string
+	server := revokeServer(t, http.StatusNotFound, &got, &path)
+
+	err := RevokeToken(cfg.InstanceConfig{URL: server.URL, RefreshToken: "r", AuthType: cfg.AuthTypeOAuth2})
+	var refused *RevokeRefusedError
+	if !errors.As(err, &refused) || refused.Status != http.StatusNotFound {
+		t.Fatalf("err = %v, want a refusal with 404", err)
+	}
+}
+
+func TestRevokeToken_ReportsAnUnreachableInstanceAsSuch(t *testing.T) {
+	err := RevokeToken(cfg.InstanceConfig{URL: "http://127.0.0.1:1", RefreshToken: "r", AuthType: cfg.AuthTypeOAuth2})
+	var refused *RevokeRefusedError
+	if err == nil || errors.As(err, &refused) {
+		t.Fatalf("err = %v, want a connection error", err)
 	}
 }

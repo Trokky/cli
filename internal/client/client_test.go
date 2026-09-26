@@ -719,3 +719,31 @@ func TestUploadFile_ServerError(t *testing.T) {
 }
 
 // GenerateTypes() is covered in generate_types_test.go
+
+// A browser sign-in can end without the CLI knowing (revoked in Studio, or from before the
+// server's upgrade): its 401 says how to sign in again, and nothing else gains the hint.
+func TestRequest_Unauthorized_AddsTheSignInHint(t *testing.T) {
+	status := http.StatusUnauthorized
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+		w.Write([]byte(`{"success":false,"error":{"message":"Invalid or expired authentication token"}}`))
+	})
+
+	c := New(server.URL, "token")
+	c.SignInHint = "sign in again with: trokky login"
+	_, err := c.Get("/collections/posts")
+	if err == nil || !strings.Contains(err.Error(), "Invalid or expired authentication token (HTTP 401): sign in again with: trokky login") {
+		t.Fatalf("err = %v", err)
+	}
+
+	status = http.StatusForbidden
+	if _, err := c.Get("/collections/posts"); err == nil || strings.Contains(err.Error(), "trokky login") {
+		t.Fatalf("a 403 is not a sign-in problem: %v", err)
+	}
+
+	status = http.StatusUnauthorized
+	c.SignInHint = ""
+	if _, err := c.Get("/collections/posts"); err == nil || strings.Contains(err.Error(), "trokky login") {
+		t.Fatalf("an API token gets no sign-in hint: %v", err)
+	}
+}
