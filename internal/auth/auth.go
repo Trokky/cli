@@ -160,6 +160,10 @@ func PollForToken(baseURL, deviceCode string, interval, expiresIn int) (*TokenRe
 
 // OpenBrowser attempts to open a URL in the user's default browser.
 func OpenBrowser(rawURL string) error {
+	// The site chose this URL: open only a web address, never a file or another handler
+	if parsed, err := url.Parse(rawURL); err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") {
+		return fmt.Errorf("not a web address: %q", rawURL)
+	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
@@ -320,14 +324,25 @@ func GetValidToken(instanceName string, instance config.InstanceConfig) (token s
 }
 
 // DeriveInstanceName derives a short name from a URL.
+//
+// The first host label, skipping "www", with the port when there is one, so two local sites
+// do not collide (localhost:3253 → localhost-3253). The Trokky MCP server derives names the
+// same way, so a site gets one name whichever tool added it.
 func DeriveInstanceName(rawURL string) string {
 	parsed, err := url.Parse(rawURL)
-	if err != nil {
+	if err != nil || parsed.Hostname() == "" {
 		return "default"
 	}
 	parts := strings.Split(parsed.Hostname(), ".")
-	if len(parts) > 0 && parts[0] != "" {
-		return parts[0]
+	name := parts[0]
+	if name == "www" && len(parts) > 1 {
+		name = parts[1]
 	}
-	return "default"
+	if name == "" {
+		return "default"
+	}
+	if port := parsed.Port(); port != "" {
+		name += "-" + port
+	}
+	return name
 }

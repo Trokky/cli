@@ -25,8 +25,8 @@ import (
 // bounded by a 30-second request timeout.
 const (
 	lockRetryEvery = 25 * time.Millisecond
-	// Longer than the longest hold, so a waiter outlasts a slow refresh instead of failing
-	lockGiveUpAfter = 45 * time.Second
+	// Longer than the stale threshold, so a waiter outlasts a crashed holder and a slow refresh
+	lockGiveUpAfter = 75 * time.Second
 	lockStaleAfter  = 60 * time.Second
 )
 

@@ -200,11 +200,14 @@ func RemoveInstance(name string) (bool, error) {
 		existed = true
 		delete(cfg.Instances, name)
 
+		// The only instance left is the obvious default. With several, none: a command without
+		// --instance must not quietly run against one picked at random
 		if cfg.Default == name {
 			cfg.Default = ""
-			for k := range cfg.Instances {
-				cfg.Default = k
-				break
+			if len(cfg.Instances) == 1 {
+				for k := range cfg.Instances {
+					cfg.Default = k
+				}
 			}
 		}
 		return nil

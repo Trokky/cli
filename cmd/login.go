@@ -32,6 +32,13 @@ Example:
 		}
 		setDefault, _ := cmd.Flags().GetBool("set-default")
 
+		// Logging in again to the same instance replaces its session; a different site under
+		// the same name would silently take its place
+		if existing, err := config.GetInstance(name); err == nil && existing != nil &&
+			config.NormalizeBaseURL(existing.URL) != baseURL {
+			return fmt.Errorf("an instance named %q already exists (%s); choose another with --name", name, existing.URL)
+		}
+
 		fmt.Println()
 		fmt.Println("Trokky CLI Login")
 		fmt.Println("────────────────────────────────────────")

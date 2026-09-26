@@ -323,11 +323,22 @@ func TestRemoveInstance_ReassignsDefault(t *testing.T) {
 	RemoveInstance("a")
 
 	cfg, _ := Load()
-	if cfg.Default == "a" {
-		t.Fatal("default should not be the removed instance")
-	}
 	if cfg.Default != "b" {
-		t.Fatalf("default should be reassigned to remaining instance, got %q", cfg.Default)
+		t.Fatalf("the only remaining instance should become the default, got %q", cfg.Default)
+	}
+}
+
+func TestRemoveInstance_PicksNoDefaultAmongSeveral(t *testing.T) {
+	overrideHome(t)
+	AddInstance("a", InstanceConfig{URL: "http://a", Token: "t"}, true)
+	AddInstance("b", InstanceConfig{URL: "http://b", Token: "t"}, false)
+	AddInstance("c", InstanceConfig{URL: "http://c", Token: "t"}, false)
+
+	RemoveInstance("a")
+
+	cfg, _ := Load()
+	if cfg.Default != "" {
+		t.Fatalf("with several instances left none should be picked, got %q", cfg.Default)
 	}
 }
 

@@ -460,7 +460,8 @@ func TestDeriveInstanceName(t *testing.T) {
 	}{
 		{"https://cms.example.com/api", "cms"},
 		{"https://my-trokky.example.com", "my-trokky"},
-		{"http://localhost:3000/api", "localhost"},
+		{"http://localhost:3000/api", "localhost-3000"},
+		{"https://www.cms.example.com", "cms"},
 		{"https://example.com", "example"},
 		{"not-a-url", "default"},
 	}
