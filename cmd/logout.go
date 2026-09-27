@@ -67,9 +67,9 @@ Example:
 		fmt.Printf("✓ Logged out from %q\n", name)
 		var refused *auth.RevokeRefusedError
 		if errors.As(revokeErr, &refused) {
-			fmt.Printf("  The instance did not accept the revocation (HTTP %d); revoke the access in its Studio under Account > Connected applications.\n", refused.Status)
+			fmt.Printf("  The instance did not accept the revocation (HTTP %d); revoke the access in its Studio under Preferences > Connected applications (the menu under your name).\n", refused.Status)
 		} else if revokeErr != nil {
-			fmt.Println("  The instance could not be reached to revoke the sign-in; revoke it in its Studio under Account > Connected applications.")
+			fmt.Println("  The instance could not be reached to revoke the sign-in; revoke it in its Studio under Preferences > Connected applications (the menu under your name).")
 		}
 		return nil
 	},
