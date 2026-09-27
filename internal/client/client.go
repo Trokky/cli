@@ -17,12 +17,16 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/trokky/cli/internal/auth"
 	"github.com/trokky/cli/internal/config"
+	"github.com/trokky/cli/internal/useragent"
 )
 
 type Client struct {
 	BaseURL    string
 	Token      string
 	HTTPClient *http.Client
+	// SignInHint is added to a 401 when the token came from a browser sign-in, which can end
+	// without the CLI knowing: revoked in Studio, or issued before the server's upgrade
+	SignInHint string
 }
 
 type HealthResponse struct {
@@ -79,14 +83,18 @@ func FromContext(cmd *cobra.Command) (*Client, error) {
 		}
 	}
 
-	return New(creds.URL, resolvedToken), nil
+	c := New(creds.URL, resolvedToken)
+	if creds.Source == "config" && creds.Instance != nil && creds.Instance.AuthType == config.AuthTypeOAuth2 {
+		c.SignInHint = fmt.Sprintf("the sign-in may have been revoked or have expired; sign in again with: trokky login %s --name %s", creds.URL, creds.InstanceName)
+	}
+	return c, nil
 }
 
 func New(baseURL, token string) *Client {
 	return &Client{
 		BaseURL:    strings.TrimRight(baseURL, "/"),
 		Token:      token,
-		HTTPClient: &http.Client{Timeout: 30 * time.Second},
+		HTTPClient: &http.Client{Timeout: 30 * time.Second, Transport: useragent.Transport(nil)},
 	}
 }
 
@@ -121,10 +129,16 @@ func (c *Client) request(method, path string, body io.Reader) ([]byte, error) {
 
 	if resp.StatusCode >= 400 {
 		var apiErr apiResponse
+		var err error
 		if json.Unmarshal(data, &apiErr) == nil && apiErr.Error != nil {
-			return nil, fmt.Errorf("%s (HTTP %d)", apiErr.Error.Message, resp.StatusCode)
+			err = fmt.Errorf("%s (HTTP %d)", apiErr.Error.Message, resp.StatusCode)
+		} else {
+			err = fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(data))
 		}
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(data))
+		if resp.StatusCode == http.StatusUnauthorized && c.SignInHint != "" {
+			err = fmt.Errorf("%w: %s", err, c.SignInHint)
+		}
+		return nil, err
 	}
 
 	// Auto-extract .data from {success: true, data: ...} envelope

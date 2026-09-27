@@ -13,17 +13,24 @@ import (
 	"time"
 
 	"github.com/trokky/cli/internal/config"
+	"github.com/trokky/cli/internal/useragent"
 )
 
 const (
-	ClientID      = "trokky-cli"
-	DefaultScopes = "openid profile content:read content:write content:delete media:read media:write offline_access"
+	ClientID = "trokky-cli"
+	// content:publish and media:delete are needed by restore (published documents) and by
+	// clean; servers before 3.5.2 ignore scopes they do not know
+	DefaultScopes = "openid profile content:read content:write content:delete content:publish media:read media:write media:delete offline_access"
 
 	deviceAuthPath = "/auth/device"
 	tokenPath      = "/auth/token"
 )
 
-var httpClient = &http.Client{Timeout: 30 * time.Second}
+var httpClient = &http.Client{Timeout: 30 * time.Second, Transport: useragent.Transport(nil)}
+
+// signInClient names the machine: the instance records it with the sign-in, for its Studio's
+// connected applications
+var signInClient = &http.Client{Timeout: 30 * time.Second, Transport: useragent.SignInTransport(nil)}
 
 // DeviceAuthResponse is returned by the device authorization endpoint.
 type DeviceAuthResponse struct {
@@ -75,7 +82,7 @@ func StartDeviceAuth(baseURL string) (*DeviceAuthResponse, error) {
 		"scope":     DefaultScopes,
 	})
 
-	resp, err := httpClient.Post(endpoint, "application/json", bytes.NewReader(body))
+	resp, err := signInClient.Post(endpoint, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
@@ -117,7 +124,7 @@ func PollForToken(baseURL, deviceCode string, interval, expiresIn int) (*TokenRe
 			"client_id":   ClientID,
 		})
 
-		resp, err := httpClient.Post(endpoint, "application/json", bytes.NewReader(body))
+		resp, err := signInClient.Post(endpoint, "application/json", bytes.NewReader(body))
 		if err != nil {
 			continue
 		}
@@ -158,6 +165,10 @@ func PollForToken(baseURL, deviceCode string, interval, expiresIn int) (*TokenRe
 
 // OpenBrowser attempts to open a URL in the user's default browser.
 func OpenBrowser(rawURL string) error {
+	// The site chose this URL: open only a web address, never a file or another handler
+	if parsed, err := url.Parse(rawURL); err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") {
+		return fmt.Errorf("not a web address: %q", rawURL)
+	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
@@ -197,10 +208,54 @@ type TokenRefreshResult struct {
 	ExpiresAt      string
 	Error          string
 	RequiresReauth bool
+	// The rotated refresh token, if the server sent one; stored by RefreshAccessToken
+	newRefreshToken string
 }
 
 // RefreshAccessToken refreshes an OAuth2 token using a refresh token.
+//
+// The refresh happens under the config lock, against the instance as it is stored now: the
+// Trokky MCP server shares this file and may have refreshed the same instance a moment ago.
+// If the stored token is already fresh, it is used as is and no request is made.
 func RefreshAccessToken(instanceName string, instance config.InstanceConfig) TokenRefreshResult {
+	var result TokenRefreshResult
+	err := config.Update(func(cfg *config.Config) error {
+		current, ok := cfg.Instances[instanceName]
+		if !ok {
+			current = instance
+		}
+		// Changed since this process read it and usable as it stands: renewed by the MCP server,
+		// or replaced by a new login or an API token
+		changed := current.Token != instance.Token
+		usable := current.AuthType != config.AuthTypeOAuth2 || current.TokenExpiresAt == "" || !IsTokenExpired(current.TokenExpiresAt, 0)
+		if changed && usable {
+			result = TokenRefreshResult{Success: true, Token: current.Token, ExpiresAt: current.TokenExpiresAt}
+			return nil
+		}
+
+		result = requestRefresh(current)
+		if !result.Success || !ok {
+			return nil
+		}
+		current.Token = result.Token
+		current.TokenExpiresAt = result.ExpiresAt
+		if result.newRefreshToken != "" {
+			current.RefreshToken = result.newRefreshToken
+		}
+		current.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		cfg.Instances[instanceName] = current
+		return nil
+	})
+	if err != nil && result.Success {
+		result.Error = fmt.Sprintf("token refreshed but failed to save config: %v", err)
+	} else if err != nil {
+		result = TokenRefreshResult{Error: err.Error()}
+	}
+	return result
+}
+
+// requestRefresh exchanges the instance's refresh token for a new access token.
+func requestRefresh(instance config.InstanceConfig) TokenRefreshResult {
 	if instance.RefreshToken == "" {
 		return TokenRefreshResult{Error: "no refresh token available", RequiresReauth: true}
 	}
@@ -210,10 +265,14 @@ func RefreshAccessToken(instanceName string, instance config.InstanceConfig) Tok
 
 	endpoint := strings.TrimRight(instance.URL, "/") + tokenPath
 
+	clientID := instance.ClientID
+	if clientID == "" {
+		clientID = ClientID
+	}
 	body, _ := json.Marshal(map[string]string{
 		"grant_type":    "refresh_token",
 		"refresh_token": instance.RefreshToken,
-		"client_id":     ClientID,
+		"client_id":     clientID,
 	})
 
 	resp, err := httpClient.Post(endpoint, "application/json", bytes.NewReader(body))
@@ -237,31 +296,52 @@ func RefreshAccessToken(instanceName string, instance config.InstanceConfig) Tok
 		return TokenRefreshResult{Error: fmt.Sprintf("invalid refresh response: %v", err), RequiresReauth: false}
 	}
 
-	expiresAt := ExpiresAtFromNow(tokenResp.ExpiresIn)
-
-	// Update stored config
-	cfg, err := config.Load()
-	if err == nil {
-		if inst, ok := cfg.Instances[instanceName]; ok {
-			inst.Token = tokenResp.AccessToken
-			inst.TokenExpiresAt = expiresAt
-			if tokenResp.RefreshToken != "" {
-				inst.RefreshToken = tokenResp.RefreshToken
-			}
-			inst.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-			cfg.Instances[instanceName] = inst
-			if saveErr := config.Save(cfg); saveErr != nil {
-				return TokenRefreshResult{
-					Success:   true,
-					Token:     tokenResp.AccessToken,
-					ExpiresAt: expiresAt,
-					Error:     fmt.Sprintf("token refreshed but failed to save config: %v", saveErr),
-				}
-			}
-		}
+	return TokenRefreshResult{
+		Success:         true,
+		Token:           tokenResp.AccessToken,
+		ExpiresAt:       ExpiresAtFromNow(tokenResp.ExpiresIn),
+		newRefreshToken: tokenResp.RefreshToken,
 	}
+}
 
-	return TokenRefreshResult{Success: true, Token: tokenResp.AccessToken, ExpiresAt: expiresAt}
+// RevokeRefusedError is a revocation the instance answered but did not accept, such as the
+// 404 of a server from before 3.5.2, which has no revocation endpoint.
+type RevokeRefusedError struct {
+	Status int
+}
+
+func (e *RevokeRefusedError) Error() string {
+	return fmt.Sprintf("the instance did not accept the revocation (HTTP %d)", e.Status)
+}
+
+// revokeClient is short on patience: revoking is a courtesy on the way out, and a hanging
+// instance must not hold up a logout for long.
+var revokeClient = &http.Client{Timeout: 10 * time.Second, Transport: useragent.Transport(nil)}
+
+// RevokeToken ends the instance's sign-in on the server (RFC 7009), so the approval also
+// disappears from the instance's connected applications. The refresh token is revoked when
+// there is one (it outlives the access token); a sign-in without offline access has only the
+// access token, which names the same approval. A refusal is a *RevokeRefusedError; any other
+// error means the instance could not be reached.
+func RevokeToken(instance config.InstanceConfig) error {
+	clientID := instance.ClientID
+	if clientID == "" {
+		clientID = ClientID
+	}
+	token := instance.RefreshToken
+	if token == "" {
+		token = instance.Token
+	}
+	body, _ := json.Marshal(map[string]string{"token": token, "client_id": clientID})
+	resp, err := revokeClient.Post(config.NormalizeBaseURL(instance.URL)+"/auth/revoke", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return &RevokeRefusedError{Status: resp.StatusCode}
+	}
+	return nil
 }
 
 // GetValidToken returns a valid token, refreshing if necessary.
@@ -284,18 +364,30 @@ func GetValidToken(instanceName string, instance config.InstanceConfig) (token s
 			instanceName, instance.URL)
 	}
 
-	return instance.Token, false, nil
+	// The token is expired: sending it anyway would only come back as a confusing 401
+	return "", false, fmt.Errorf("could not renew the session for instance %q: %s", instanceName, result.Error)
 }
 
 // DeriveInstanceName derives a short name from a URL.
+//
+// The first host label, skipping "www", with the port when there is one, so two local sites
+// do not collide (localhost:3253 → localhost-3253). The Trokky MCP server derives names the
+// same way, so a site gets one name whichever tool added it.
 func DeriveInstanceName(rawURL string) string {
 	parsed, err := url.Parse(rawURL)
-	if err != nil {
+	if err != nil || parsed.Hostname() == "" {
 		return "default"
 	}
 	parts := strings.Split(parsed.Hostname(), ".")
-	if len(parts) > 0 && parts[0] != "" {
-		return parts[0]
+	name := parts[0]
+	if name == "www" && len(parts) > 1 {
+		name = parts[1]
 	}
-	return "default"
+	if name == "" {
+		return "default"
+	}
+	if port := parsed.Port(); port != "" {
+		name += "-" + port
+	}
+	return name
 }

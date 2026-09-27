@@ -1,10 +1,13 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -161,12 +164,15 @@ func TestLoad_InvalidYAML(t *testing.T) {
 	os.MkdirAll(filepath.Dir(path), 0700)
 	os.WriteFile(path, []byte("not: [valid: yaml: {{"), 0600)
 
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() should not error on invalid YAML, got: %v", err)
+	// An empty config here would be saved over the broken file, losing every instance
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() must error on invalid YAML, not return an empty config")
 	}
-	if cfg.Version != "1.0" {
-		t.Fatal("expected empty config fallback")
+	if err := AddInstance("x", InstanceConfig{URL: "http://x"}, true); err == nil {
+		t.Fatal("AddInstance() must refuse to overwrite an unreadable config")
+	}
+	if data, _ := os.ReadFile(path); string(data) != "not: [valid: yaml: {{" {
+		t.Fatalf("the broken config was overwritten: %q", data)
 	}
 }
 
@@ -317,11 +323,22 @@ func TestRemoveInstance_ReassignsDefault(t *testing.T) {
 	RemoveInstance("a")
 
 	cfg, _ := Load()
-	if cfg.Default == "a" {
-		t.Fatal("default should not be the removed instance")
-	}
 	if cfg.Default != "b" {
-		t.Fatalf("default should be reassigned to remaining instance, got %q", cfg.Default)
+		t.Fatalf("the only remaining instance should become the default, got %q", cfg.Default)
+	}
+}
+
+func TestRemoveInstance_PicksNoDefaultAmongSeveral(t *testing.T) {
+	overrideHome(t)
+	AddInstance("a", InstanceConfig{URL: "http://a", Token: "t"}, true)
+	AddInstance("b", InstanceConfig{URL: "http://b", Token: "t"}, false)
+	AddInstance("c", InstanceConfig{URL: "http://c", Token: "t"}, false)
+
+	RemoveInstance("a")
+
+	cfg, _ := Load()
+	if cfg.Default != "" {
+		t.Fatalf("with several instances left none should be picked, got %q", cfg.Default)
 	}
 }
 
@@ -848,5 +865,118 @@ func TestInstanceConfig_YAMLRoundtrip(t *testing.T) {
 	}
 	if inst.UpdatedAt == "" {
 		t.Fatal("UpdatedAt should be set")
+	}
+}
+
+func TestUpdate_ConcurrentWritersLoseNothing(t *testing.T) {
+	overrideHome(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if err := AddInstance(fmt.Sprintf("site-%d", i), InstanceConfig{URL: "http://x"}, false); err != nil {
+				t.Errorf("AddInstance: %v", err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	instances, _, err := ListInstances()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(instances) != 20 {
+		t.Fatalf("got %d instances, want 20: concurrent saves overwrote each other", len(instances))
+	}
+	if _, err := os.Stat(lockPath()); !os.IsNotExist(err) {
+		t.Fatal("lock file left behind")
+	}
+	entries, _ := os.ReadDir(filepath.Dir(ConfigPath()))
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".config-") {
+			t.Fatalf("temp file left behind: %s", e.Name())
+		}
+	}
+}
+
+func TestUpdate_RecoversAStaleLock(t *testing.T) {
+	overrideHome(t)
+	os.MkdirAll(filepath.Dir(ConfigPath()), 0700)
+	os.WriteFile(lockPath(), []byte("12345"), 0600)
+	old := time.Now().Add(-2 * lockStaleAfter)
+	os.Chtimes(lockPath(), old, old)
+
+	if err := AddInstance("x", InstanceConfig{URL: "http://x"}, true); err != nil {
+		t.Fatalf("a lock abandoned long ago must not block: %v", err)
+	}
+}
+
+func TestSave_IsPrivate(t *testing.T) {
+	overrideHome(t)
+	if err := AddInstance("x", InstanceConfig{URL: "http://x", Token: "secret"}, true); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(ConfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("config mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestLock_ReleaseLeavesAnotherOwnersLock(t *testing.T) {
+	overrideHome(t)
+	release, err := acquireLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A waiter took the lock over while this holder was believed dead
+	os.WriteFile(lockPath(), []byte("someone-else"), 0600)
+	release()
+	if data, err := os.ReadFile(lockPath()); err != nil || string(data) != "someone-else" {
+		t.Fatalf("release removed or changed another owner's lock: %q, %v", data, err)
+	}
+}
+
+func TestLock_TakeoverPutsBackALiveLock(t *testing.T) {
+	overrideHome(t)
+	os.MkdirAll(filepath.Dir(lockPath()), 0700)
+	os.WriteFile(lockPath(), []byte("live-owner"), 0600)
+	// Seen stale a moment ago, but replaced by a live lock before the rename
+	takeOverStaleLock(lockPath())
+	if data, err := os.ReadFile(lockPath()); err != nil || string(data) != "live-owner" {
+		t.Fatalf("a live lock was taken over: %q, %v", data, err)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(lockPath()))
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".stale") {
+			t.Fatalf("left %s behind", e.Name())
+		}
+	}
+}
+
+func TestSave_KeepsKeysThisVersionDoesNotKnow(t *testing.T) {
+	overrideHome(t)
+	os.MkdirAll(filepath.Dir(ConfigPath()), 0700)
+	os.WriteFile(ConfigPath(), []byte(`version: "1.0"
+default: a
+mcp:
+    uploadDirs: /tmp
+instances:
+    a:
+        url: http://a
+        token: t
+        clientId: trokky-mcp
+        grantedScopes: content:read
+`), 0600)
+	if err := AddInstance("b", InstanceConfig{URL: "http://b"}, false); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(ConfigPath())
+	for _, want := range []string{"mcp:", "uploadDirs", "grantedScopes: content:read", "clientId: trokky-mcp"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("saved config lost %q:\n%s", want, data)
+		}
 	}
 }

@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
+	"github.com/trokky/cli/internal/auth"
 	"github.com/trokky/cli/internal/config"
 )
 
@@ -46,6 +48,14 @@ Example:
 			}
 		}
 
+		// Revoke the sign-in on the instance first, so it also disappears from its Studio's
+		// connected applications; best effort, an unreachable instance must not block logout
+		inst, _ := config.GetInstance(name)
+		var revokeErr error
+		if inst != nil && inst.AuthType == config.AuthTypeOAuth2 && (inst.RefreshToken != "" || inst.Token != "") {
+			revokeErr = auth.RevokeToken(*inst)
+		}
+
 		removed, err := config.RemoveInstance(name)
 		if err != nil {
 			return fmt.Errorf("failed to save config: %w", err)
@@ -55,6 +65,12 @@ Example:
 		}
 
 		fmt.Printf("✓ Logged out from %q\n", name)
+		var refused *auth.RevokeRefusedError
+		if errors.As(revokeErr, &refused) {
+			fmt.Printf("  The instance did not accept the revocation (HTTP %d); revoke the access in its Studio under Account > Connected applications.\n", refused.Status)
+		} else if revokeErr != nil {
+			fmt.Println("  The instance could not be reached to revoke the sign-in; revoke it in its Studio under Account > Connected applications.")
+		}
 		return nil
 	},
 }

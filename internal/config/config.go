@@ -32,19 +32,26 @@ type InstanceConfig struct {
 	Description    string `yaml:"description,omitempty"`
 	AddedAt        string `yaml:"addedAt,omitempty"`
 	UpdatedAt      string `yaml:"updatedAt,omitempty"`
+	// The OAuth2 client the token was issued to; a refresh must name the same one. Set by the
+	// Trokky MCP server (trokky-mcp); empty means the CLI's own client.
+	ClientID string `yaml:"clientId,omitempty"`
+	// Keys this version does not know, kept so a save never drops what another tool wrote
+	Extra map[string]interface{} `yaml:",inline"`
 }
 
 type Config struct {
 	Version   string                    `yaml:"version"`
 	Default   string                    `yaml:"default,omitempty"`
 	Instances map[string]InstanceConfig `yaml:"instances"`
+	// Keys this version does not know, kept so a save never drops what another tool wrote
+	Extra map[string]interface{} `yaml:",inline"`
 }
 
 // ResolvedCredentials holds credentials resolved from flags, env, or config.
 type ResolvedCredentials struct {
 	URL          string
 	Token        string
-	Source       string // "cli", "env", or "config"
+	Source       string          // "cli", "env", or "config"
 	InstanceName string          // set when Source is "config"
 	Instance     *InstanceConfig // set when Source is "config"
 }
@@ -96,7 +103,8 @@ func Load() (*Config, error) {
 
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return newConfig(), nil
+		// Never an empty config: the next save would overwrite every saved instance
+		return nil, fmt.Errorf("%s is not valid YAML (%v); fix it or move it aside", path, err)
 	}
 
 	if cfg.Version == "" {
@@ -109,7 +117,9 @@ func Load() (*Config, error) {
 	return &cfg, nil
 }
 
-// Save writes the config to ~/.trokky/config.yaml.
+// Save writes the config to ~/.trokky/config.yaml, atomically: it is written aside and
+// renamed into place, so a reader never sees a half-written file. Use Update for a
+// read-modify-write, which also takes the lock shared with the Trokky MCP server.
 func Save(cfg *Config) error {
 	path := ConfigPath()
 	if path == "" {
@@ -125,59 +135,84 @@ func Save(cfg *Config) error {
 		return err
 	}
 
-	return os.WriteFile(path, data, 0600)
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.yaml")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	// On disk before it replaces the old file, so a crash cannot leave an empty config
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	// Windows refuses to replace a file another process has open; a reader holds it briefly
+	for attempt := 0; ; attempt++ {
+		err := os.Rename(tmp.Name(), path)
+		if err == nil || attempt == 5 {
+			return err
+		}
+		time.Sleep(time.Duration(attempt+1) * 20 * time.Millisecond)
+	}
 }
 
 // AddInstance adds or updates a named instance in the config.
 // If setAsDefault is true, or this is the first instance, it becomes the default.
 func AddInstance(name string, inst InstanceConfig, setAsDefault bool) error {
-	cfg, err := Load()
-	if err != nil {
-		return err
-	}
+	return Update(func(cfg *Config) error {
+		now := time.Now().UTC().Format(time.RFC3339)
 
-	now := time.Now().UTC().Format(time.RFC3339)
+		existing, exists := cfg.Instances[name]
+		if exists {
+			inst.AddedAt = existing.AddedAt
+		} else {
+			inst.AddedAt = now
+		}
+		inst.UpdatedAt = now
 
-	existing, exists := cfg.Instances[name]
-	if exists {
-		inst.AddedAt = existing.AddedAt
-	} else {
-		inst.AddedAt = now
-	}
-	inst.UpdatedAt = now
+		cfg.Instances[name] = inst
 
-	cfg.Instances[name] = inst
-
-	if setAsDefault || len(cfg.Instances) == 1 {
-		cfg.Default = name
-	}
-
-	return Save(cfg)
+		if setAsDefault || len(cfg.Instances) == 1 {
+			cfg.Default = name
+		}
+		return nil
+	})
 }
 
 // RemoveInstance removes a named instance. Returns true if it existed.
 // If the removed instance was the default, the default is reassigned.
 func RemoveInstance(name string) (bool, error) {
-	cfg, err := Load()
-	if err != nil {
-		return false, err
-	}
-
-	if _, ok := cfg.Instances[name]; !ok {
-		return false, nil
-	}
-
-	delete(cfg.Instances, name)
-
-	if cfg.Default == name {
-		cfg.Default = ""
-		for k := range cfg.Instances {
-			cfg.Default = k
-			break
+	existed := false
+	err := Update(func(cfg *Config) error {
+		if _, ok := cfg.Instances[name]; !ok {
+			return nil
 		}
-	}
+		existed = true
+		delete(cfg.Instances, name)
 
-	return true, Save(cfg)
+		// The only instance left is the obvious default. With several, none: a command without
+		// --instance must not quietly run against one picked at random
+		if cfg.Default == name {
+			cfg.Default = ""
+			if len(cfg.Instances) == 1 {
+				for k := range cfg.Instances {
+					cfg.Default = k
+				}
+			}
+		}
+		return nil
+	})
+	return existed, err
 }
 
 // ListInstances returns all configured instances and the default name.
@@ -225,17 +260,16 @@ func GetDefaultInstance() (string, *InstanceConfig, error) {
 // SetDefaultInstance sets the default instance by name.
 // Returns false if the instance does not exist.
 func SetDefaultInstance(name string) (bool, error) {
-	cfg, err := Load()
-	if err != nil {
-		return false, err
-	}
-
-	if _, ok := cfg.Instances[name]; !ok {
-		return false, nil
-	}
-
-	cfg.Default = name
-	return true, Save(cfg)
+	found := false
+	err := Update(func(cfg *Config) error {
+		if _, ok := cfg.Instances[name]; !ok {
+			return nil
+		}
+		found = true
+		cfg.Default = name
+		return nil
+	})
+	return found, err
 }
 
 // NormalizeBaseURL trims trailing slashes and ensures the URL points at the
