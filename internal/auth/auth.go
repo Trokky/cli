@@ -28,6 +28,10 @@ const (
 
 var httpClient = &http.Client{Timeout: 30 * time.Second, Transport: useragent.Transport(nil)}
 
+// signInClient names the machine: the instance records it with the sign-in, for its Studio's
+// connected applications
+var signInClient = &http.Client{Timeout: 30 * time.Second, Transport: useragent.SignInTransport(nil)}
+
 // DeviceAuthResponse is returned by the device authorization endpoint.
 type DeviceAuthResponse struct {
 	DeviceCode              string `json:"device_code"`
@@ -78,7 +82,7 @@ func StartDeviceAuth(baseURL string) (*DeviceAuthResponse, error) {
 		"scope":     DefaultScopes,
 	})
 
-	resp, err := httpClient.Post(endpoint, "application/json", bytes.NewReader(body))
+	resp, err := signInClient.Post(endpoint, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
@@ -120,7 +124,7 @@ func PollForToken(baseURL, deviceCode string, interval, expiresIn int) (*TokenRe
 			"client_id":   ClientID,
 		})
 
-		resp, err := httpClient.Post(endpoint, "application/json", bytes.NewReader(body))
+		resp, err := signInClient.Post(endpoint, "application/json", bytes.NewReader(body))
 		if err != nil {
 			continue
 		}

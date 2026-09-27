@@ -619,19 +619,37 @@ func TestRevokeToken_ReportsAnUnreachableInstanceAsSuch(t *testing.T) {
 	}
 }
 
-// The instance records the User-Agent with the sign-in, for its connected applications
-func TestAuthRequestsNameTheCLI(t *testing.T) {
-	agents := make(chan string, 2)
+// The instance records the sign-in's User-Agent with the grant: it names the machine. Other
+// requests name only the CLI.
+func TestSignInNamesTheMachine(t *testing.T) {
+	agents := map[string]string{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		agents <- r.UserAgent()
-		w.WriteHeader(http.StatusOK)
+		agents[r.URL.Path] = r.UserAgent()
+		switch r.URL.Path {
+		case "/api/auth/device":
+			w.Write([]byte(`{"device_code":"d","user_code":"U","verification_uri":"v","expires_in":60,"interval":1}`))
+		case "/api/auth/token":
+			w.Write([]byte(`{"access_token":"a","token_type":"Bearer","expires_in":3600}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
 	}))
 	defer server.Close()
-	_ = RevokeToken(cfg.InstanceConfig{URL: server.URL, Token: "t"})
-	_, _ = httpClient.Get(server.URL)
-	for i := 0; i < 2; i++ {
-		if got := <-agents; !strings.HasPrefix(got, "trokky-cli/") {
-			t.Fatalf("User-Agent = %q", got)
+
+	if _, err := StartDeviceAuth(server.URL + "/api"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PollForToken(server.URL+"/api", "d", 0, 60); err != nil {
+		t.Fatal(err)
+	}
+	_ = RevokeToken(cfg.InstanceConfig{URL: server.URL + "/api", Token: "t"})
+
+	for _, path := range []string{"/api/auth/device", "/api/auth/token"} {
+		if got := agents[path]; !strings.HasPrefix(got, "trokky-cli/") || !strings.Contains(got, " (") {
+			t.Fatalf("%s User-Agent = %q, want the machine named", path, got)
 		}
+	}
+	if got := agents["/api/auth/revoke"]; !strings.HasPrefix(got, "trokky-cli/") || strings.Contains(got, "(") {
+		t.Fatalf("revoke User-Agent = %q, want the CLI only", got)
 	}
 }
