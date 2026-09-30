@@ -62,7 +62,7 @@ func TestLogout_ForgetsAnUnreachableOrRefusingInstanceAndSaysWhy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "could not be reached") {
+	if !strings.Contains(out, "Preferences > Connected applications") || !strings.Contains(out, "could not be reached") {
 		t.Fatalf("output %q", out)
 	}
 	if inst, _ := config.GetInstance("gone"); inst != nil {
@@ -76,7 +76,7 @@ func TestLogout_ForgetsAnUnreachableOrRefusingInstanceAndSaysWhy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "did not accept the revocation (HTTP 404)") {
+	if !strings.Contains(out, "Preferences > Connected applications") || !strings.Contains(out, "did not accept the revocation (HTTP 404)") {
 		t.Fatalf("output %q", out)
 	}
 	if inst, _ := config.GetInstance("old"); inst != nil {
