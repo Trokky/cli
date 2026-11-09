@@ -59,6 +59,7 @@ trokky create my-site
 | `login <url>` | Authenticate via OAuth2 device flow |
 | `logout [name]` | Remove stored credentials |
 | `status` | Show instance health and collections |
+| `doctor` | Check a site for problems that fail silently (Trokky 3.6+, admin) |
 | `config add\|remove\|list\|use\|path` | Manage instance configurations |
 | `documents list\|get\|create\|update\|delete` | CRUD operations on documents |
 | `backup --output <file>` | Create a zip backup with manifest |

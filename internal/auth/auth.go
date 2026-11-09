@@ -19,8 +19,9 @@ import (
 const (
 	ClientID = "trokky-cli"
 	// content:publish and media:delete are needed by restore (published documents) and by
-	// clean; servers before 3.5.2 ignore scopes they do not know
-	DefaultScopes = "openid profile content:read content:write content:delete content:publish media:read media:write media:delete offline_access"
+	// clean, system:read by doctor (granted to admins only); servers before 3.5.2 ignore
+	// scopes they do not know
+	DefaultScopes = "openid profile content:read content:write content:delete content:publish media:read media:write media:delete system:read offline_access"
 
 	deviceAuthPath = "/auth/device"
 	tokenPath      = "/auth/token"
