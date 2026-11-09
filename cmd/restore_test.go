@@ -74,6 +74,13 @@ const (
 // one document that references one media file, and that media file.
 func writeBackupZip(t *testing.T) string {
 	t.Helper()
+	return writeBackupZipWith(t, false)
+}
+
+// writeBackupZipWith builds the single-post backup, optionally with a "settings" singleton
+// collection holding one document, restored before posts.
+func writeBackupZipWith(t *testing.T, withSettings bool) string {
+	t.Helper()
 
 	manifest := map[string]interface{}{
 		"version":   "2.0",
@@ -96,6 +103,15 @@ func writeBackupZip(t *testing.T) string {
 			},
 		},
 		"statistics": map[string]interface{}{"totalDocuments": 1, "totalMedia": 1},
+	}
+	if withSettings {
+		manifest["schemas"] = append(manifest["schemas"].([]map[string]interface{}), map[string]interface{}{
+			"name":      "settings",
+			"title":     "Settings",
+			"singleton": true,
+			"fields":    []map[string]interface{}{{"name": "title", "type": "string"}},
+		})
+		manifest["restoreOrder"] = []string{"settings", "posts"}
 	}
 	manifestJSON, err := json.Marshal(manifest)
 	if err != nil {
@@ -124,6 +140,12 @@ func writeBackupZip(t *testing.T) string {
 		{"manifest.json", manifestJSON},
 		{"collections/posts/doc-old-1.json", docJSON},
 		{"media/photo.png", []byte("png")},
+	}
+	if withSettings {
+		entries = append(entries, struct {
+			name string
+			data []byte
+		}{"collections/settings/settings.json", []byte(`{"id":"settings","title":"Site"}`)})
 	}
 	for _, e := range entries {
 		w, err := zw.Create(e.name)
@@ -167,6 +189,13 @@ func runRestore(t *testing.T, args ...string) (string, string, error) {
 			t.Fatal(err)
 		}
 	}
+
+	// --preserve-ids defaults by whether it was given at all, so it must also look unset
+	preserve := restoreCmd.Flags().Lookup("preserve-ids")
+	if err := preserve.Value.Set("false"); err != nil {
+		t.Fatal(err)
+	}
+	preserve.Changed = false
 
 	var stdout, stderr bytes.Buffer
 	rootCmd.SetOut(&stdout)
@@ -242,11 +271,11 @@ func TestRestoreAbortsBeforeUploadingMediaWhenDocumentWritesAreForbidden(t *test
 
 	stdout, _, err := runRestore(t, "--input", writeBackupZip(t), "--url", server.URL+"/api", "--token", "read-only", "-q")
 
-	want := "token lacks content:write (required to restore documents): "
+	want := "the token is not allowed to restore these documents: "
 	if err == nil {
 		t.Error("expected an error for a token that cannot write documents")
-	} else if !strings.HasPrefix(err.Error(), want) {
-		t.Errorf("error = %q, want it to start with %q", err.Error(), want)
+	} else if !strings.HasPrefix(err.Error(), want) || !strings.Contains(err.Error(), "content:write scope required") {
+		t.Errorf("error = %q, want it to start with %q and carry the server's reason", err.Error(), want)
 	}
 	if n := rec.countPath("/media/upload"); n != 0 {
 		t.Errorf("%d request(s) hit /media/upload; the restore must abort before uploading anything", n)
@@ -648,5 +677,145 @@ func TestRestoreCleanStopsWhenMediaCannotBeDeleted(t *testing.T) {
 	}
 	if n := rec.countPath("/media"); n != 1 {
 		t.Errorf("listed media %d times, want 1", n)
+	}
+}
+
+// newIDServer answers a restore of the single-post backup, listing posts as `posts`
+// (a raw response body for GET /collections/posts, or "" for a 404).
+func newIDServer(rec *recorder, posts string) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.record(r)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && apiPath(r) == "/collections":
+			io.WriteString(w, testCollectionsResponse)
+		case r.Method == http.MethodGet && apiPath(r) == "/collections/posts":
+			if posts == "" {
+				w.WriteHeader(http.StatusNotFound)
+				io.WriteString(w, `{"success":false,"error":{"message":"not found"}}`)
+				return
+			}
+			io.WriteString(w, posts)
+		case r.Method == http.MethodPost && apiPath(r) == "/collections/posts":
+			// The server keeps an id the create names, and mints one otherwise
+			var body struct {
+				ID string `json:"id"`
+			}
+			json.Unmarshal([]byte(rec.all()[len(rec.all())-1].Body), &body)
+			id := body.ID
+			if id == "" {
+				id = testNewDocID
+			}
+			io.WriteString(w, `{"success":true,"data":{"document":{"id":"`+id+`"}}}`)
+		case r.Method == http.MethodPost && apiPath(r) == "/media/upload":
+			io.WriteString(w, `{"success":true,"data":{"files":[{"id":"`+testNewMediaID+`"}]}}`)
+		default:
+			io.WriteString(w, `{"success":true,"data":{}}`)
+		}
+	}))
+}
+
+const (
+	emptyPostsPage     = `{"success":true,"data":{"documents":[],"pagination":{"total":0}}}`
+	populatedPostsPage = `{"success":true,"data":{"documents":[{"id":"someone-else"}],"pagination":{"total":1}}}`
+)
+
+func createdPostBody(t *testing.T, rec *recorder) map[string]interface{} {
+	t.Helper()
+	for _, req := range rec.all() {
+		if req.Method == http.MethodPost && req.Path == "/collections/posts" {
+			var body map[string]interface{}
+			if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
+				t.Fatalf("create body is not JSON: %s", req.Body)
+			}
+			return body
+		}
+	}
+	t.Fatal("no document was created")
+	return nil
+}
+
+func TestRestorePreservesDocumentIDs(t *testing.T) {
+	cases := []struct {
+		name       string
+		posts      string
+		args       []string
+		wantID     bool
+		wantNotice string
+	}{
+		{"empty target keeps ids by default", emptyPostsPage, nil, true, "kept from the backup (the target has none"},
+		{"populated target mints new ids by default", populatedPostsPage, nil, false, "Pass --preserve-ids"},
+		{"--preserve-ids keeps ids in a populated target", populatedPostsPage, []string{"--preserve-ids"}, true, "a document with the same id is overwritten"},
+		{"--preserve-ids=false mints new ids in an empty target", emptyPostsPage, []string{"--preserve-ids=false"}, false, "(--preserve-ids=false)"},
+		{"an unlistable target is not assumed empty", "", nil, false, "Pass --preserve-ids"},
+		{"an unreadable listing is not assumed empty", `{"success":true,"data":{"items":[]}}`, nil, false, "Pass --preserve-ids"},
+		{"a bare empty array is empty", `{"success":true,"data":[]}`, nil, true, "the target has none"},
+		{"--clean keeps ids", populatedPostsPage, []string{"--clean"}, true, "--clean empties the target first"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &recorder{}
+			server := newIDServer(rec, tc.posts)
+			defer server.Close()
+
+			args := append([]string{"--input", writeBackupZip(t), "--url", server.URL + "/api", "--token", "t", "-q"}, tc.args...)
+			stdout, stderr, err := runRestore(t, args...)
+			if err != nil {
+				t.Fatalf("restore failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+			}
+			if !strings.Contains(stdout, tc.wantNotice) {
+				t.Errorf("output is missing %q:\n%s", tc.wantNotice, stdout)
+			}
+			id, named := createdPostBody(t, rec)["id"]
+			if tc.wantID && id != "doc-old-1" {
+				t.Errorf("create did not name the backup's id: %v", id)
+			}
+			if !tc.wantID && named {
+				t.Errorf("create named an id (%v), want the server to mint one", id)
+			}
+		})
+	}
+}
+
+func TestRestoreIgnoresSingletonsWhenDecidingWhetherTheTargetIsEmpty(t *testing.T) {
+	rec := &recorder{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.record(r)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && apiPath(r) == "/collections":
+			io.WriteString(w, `{"success":true,"data":{"collections":[{"name":"posts","title":"Posts","fields":[{"name":"title","type":"string"}]},{"name":"settings","title":"Settings","singleton":true,"fields":[{"name":"title","type":"string"}]}]}}`)
+		case r.Method == http.MethodGet && apiPath(r) == "/collections/settings":
+			// Auto-created by a first Studio visit
+			io.WriteString(w, `{"success":true,"data":{"documents":[{"id":"settings"}]}}`)
+		case r.Method == http.MethodGet && apiPath(r) == "/collections/posts":
+			io.WriteString(w, emptyPostsPage)
+		case r.Method == http.MethodPost && apiPath(r) == "/collections/posts":
+			io.WriteString(w, `{"success":true,"data":{"document":{"id":"doc-old-1"}}}`)
+		case r.Method == http.MethodPost && apiPath(r) == "/media/upload":
+			io.WriteString(w, `{"success":true,"data":{"files":[{"id":"`+testNewMediaID+`"}]}}`)
+		default:
+			io.WriteString(w, `{"success":true,"data":{}}`)
+		}
+	}))
+	defer server.Close()
+
+	stdout, stderr, err := runRestore(t, "--input", writeBackupZipWith(t, true), "--url", server.URL+"/api", "--token", "t", "-q")
+	if err != nil {
+		t.Fatalf("restore failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Restoring settings") {
+		t.Fatalf("the backup's singleton was not part of the restore:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "kept from the backup (the target has none") {
+		t.Errorf("an auto-created singleton made the target look populated:\n%s", stdout)
+	}
+	for _, req := range rec.all() {
+		if req.Method == http.MethodGet && req.Path == "/collections/settings" {
+			t.Errorf("the singleton collection was listed for the emptiness check")
+		}
+	}
+	if id := createdPostBody(t, rec)["id"]; id != "doc-old-1" {
+		t.Errorf("create did not name the backup's id: %v", id)
 	}
 }

@@ -182,6 +182,10 @@ trokky restore --input backup.zip --dry-run
 # Restore with options
 trokky restore --input backup.zip --clean --overwrite
 trokky restore --input backup.zip --collections posts --with-dependencies
+
+# Keep the backup's document ids in an instance that already has content
+# (the default when the target is empty or with --clean; overwrites same-id documents)
+trokky restore --input backup.zip --preserve-ids
 ```
 
 ## Project Scaffolding
