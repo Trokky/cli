@@ -141,9 +141,16 @@ Examples:
 		fmt.Println("  Next steps:")
 		fmt.Println()
 		fmt.Printf("    cd %s\n", name)
-		fmt.Println("    cp .env.example .env     # Configure your environment")
 		fmt.Println("    npm install               # Install dependencies")
 		fmt.Println("    npm run dev               # Start development server")
+		fmt.Println()
+		fmt.Println("  .env holds freshly generated secrets and is not committed. On a server, set")
+		fmt.Println("  TROKKY_JWT_SECRET and TROKKY_CLAIM_SECRET to values of your own.")
+		if cfg.Studio == scaffold.StudioNone {
+			fmt.Println("  Claim the site with POST /api/auth/claim, using TROKKY_CLAIM_SECRET from .env.")
+		} else {
+			fmt.Println("  Open the Studio and claim the site, using TROKKY_CLAIM_SECRET from .env.")
+		}
 		fmt.Println()
 
 		return nil

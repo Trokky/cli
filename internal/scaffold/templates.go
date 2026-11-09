@@ -347,14 +347,19 @@ export default {
 
   security: {
     enabled: true,
-    jwtSecret: process.env.JWT_SECRET || 'change-me-in-production',
-    adminUser: {
+    // No fallback: a fallback is a key anyone who has read this file can sign tokens with.
+    // trokky create generated one into .env; set your own on the server.
+    jwtSecret: process.env.TROKKY_JWT_SECRET,
+    // Created on first start when ADMIN_PASSWORD is set. Without it nobody is created, and the
+    // first person to claim the site (%s) becomes its administrator: keep
+    // TROKKY_CLAIM_SECRET set so only someone who has it can.
+    adminUser: process.env.ADMIN_PASSWORD ? {
       username: process.env.ADMIN_USERNAME || 'admin',
       email: process.env.ADMIN_EMAIL || 'admin@example.com',
-      password: process.env.ADMIN_PASSWORD || 'admin123',
+      password: process.env.ADMIN_PASSWORD,
       firstName: 'Admin',
       lastName: 'User',
-    },
+    } : undefined,
     passkey: process.env.PASSKEY_RP_ID ? {
       enabled: true,
       rpId: process.env.PASSKEY_RP_ID,
@@ -380,24 +385,48 @@ export default {
   },%s%s%s%s%s
 }
 `, schemaImports, mailImport, structureImport, mailConsts, schemas,
-		dataConfig, mediaConfig, cfg.Name,
+		dataConfig, mediaConfig, claimWhere(cfg), cfg.Name,
 		oauthConfig, mailConfig, captchaConfig, studioConfig, i18nConfig)
+}
+
+// claimWhere says where a project's first administrator claims the site.
+func claimWhere(cfg ProjectConfig) string {
+	if cfg.Studio == StudioNone {
+		return "POST /api/auth/claim, there is no Studio"
+	}
+	return "in the Studio, on first visit"
+}
+
+// GenerateEnv is .env.example with fresh secrets filled in: the file trokky create writes as
+// .env, so development keeps its sign-ins across restarts without anyone inventing a key.
+func GenerateEnv(cfg ProjectConfig, secret func() string) string {
+	env := GenerateEnvExample(cfg)
+	for _, name := range []string{"TROKKY_JWT_SECRET", "TROKKY_CLAIM_SECRET"} {
+		env = strings.Replace(env, "\n"+name+"=\n", "\n"+name+"="+secret()+"\n", 1)
+	}
+	return env
 }
 
 // GenerateEnvExample generates the .env.example file.
 func GenerateEnvExample(cfg ProjectConfig) string {
 	lines := []string{
-		"# Server",
+		"# Server (set NODE_ENV=production on the server: it turns on the production checks)",
 		"PORT=3000",
 		"NODE_ENV=development",
 		"",
-		"# Security",
-		"JWT_SECRET=your-secret-key-change-in-production",
+		"# Security. Generate each value, do not invent it: openssl rand -base64 48",
+		"# (trokky create wrote generated ones into .env.)",
+		"# Signs sessions and tokens. It must stay the same across restarts and deploys, or",
+		"# every sign-in ends. Without it, newer Trokky versions refuse to start in production.",
+		"TROKKY_JWT_SECRET=",
+		"# Asked for by the first-boot claim (below), so only someone who has it can claim the site.",
+		"TROKKY_CLAIM_SECRET=",
 		"",
-		"# Admin User",
+		"# Admin user, created on first start when ADMIN_PASSWORD is set. Leave it empty to",
+		fmt.Sprintf("# claim the site instead (%s).", claimWhere(cfg)),
 		"ADMIN_USERNAME=admin",
 		"ADMIN_EMAIL=admin@example.com",
-		"ADMIN_PASSWORD=admin123",
+		"ADMIN_PASSWORD=",
 	}
 
 	if cfg.Studio != StudioNone {
@@ -414,27 +443,30 @@ func GenerateEnvExample(cfg ProjectConfig) string {
 			"TROKKY_MAIL_ENABLED=true",
 			fmt.Sprintf("TROKKY_MAIL_PROVIDER=%s", cfg.Mail))
 		if cfg.Mail == MailResend {
-			lines = append(lines, "RESEND_API_KEY=re_xxxxx")
+			// Empty, not a placeholder: with no key the console adapter prints mail instead
+			lines = append(lines, "# From the Resend dashboard; mail is printed to the console until set", "RESEND_API_KEY=")
 		}
 		lines = append(lines, "EMAIL_FROM=noreply@example.com", "EMAIL_FROM_NAME=My App")
 	}
 
 	if cfg.Auth == AuthOAuth {
-		lines = append(lines, "", "# OAuth (Google)",
-			"GOOGLE_CLIENT_ID=your-client-id",
-			"GOOGLE_CLIENT_SECRET=your-client-secret",
+		// Empty, not a placeholder: a set client id shows a Google button that cannot work
+		lines = append(lines, "", "# OAuth (Google; from the Google Cloud console, sign-in with Google is off until set)",
+			"GOOGLE_CLIENT_ID=",
+			"GOOGLE_CLIENT_SECRET=",
 			"GOOGLE_REDIRECT_URI=http://localhost:3000/api/auth/google/callback")
 	}
 
 	if cfg.Captcha == CaptchaTurnstile {
-		lines = append(lines, "", "# Cloudflare Turnstile",
-			"TURNSTILE_SITE_KEY=your-site-key",
-			"TURNSTILE_SECRET_KEY=your-secret-key")
+		// Empty, not a placeholder: a set secret key turns the captcha on, and a made-up one fails every form
+		lines = append(lines, "", "# Cloudflare Turnstile (keys from the Cloudflare dashboard; captcha is off until set)",
+			"TURNSTILE_SITE_KEY=",
+			"TURNSTILE_SECRET_KEY=")
 	}
 	if cfg.Captcha == CaptchaRecaptcha {
-		lines = append(lines, "", "# Google reCAPTCHA",
-			"RECAPTCHA_SITE_KEY=your-site-key",
-			"RECAPTCHA_SECRET_KEY=your-secret-key")
+		lines = append(lines, "", "# Google reCAPTCHA (keys from the reCAPTCHA admin console; captcha is off until set)",
+			"RECAPTCHA_SITE_KEY=",
+			"RECAPTCHA_SECRET_KEY=")
 	}
 
 	lines = append(lines, "",
