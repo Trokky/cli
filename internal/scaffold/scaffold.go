@@ -1,7 +1,11 @@
 package scaffold
 
 import (
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -62,5 +66,22 @@ func Scaffold(cfg ProjectConfig, targetDir string) error {
 		}
 	}
 
+	// A .env with generated secrets (gitignored), unless one is already there
+	envPath := filepath.Join(targetDir, ".env")
+	if _, err := os.Stat(envPath); errors.Is(err, fs.ErrNotExist) {
+		if err := os.WriteFile(envPath, []byte(GenerateEnv(cfg, newSecret)), 0600); err != nil {
+			return fmt.Errorf("failed to write %s: %w", envPath, err)
+		}
+	}
+
 	return nil
+}
+
+// newSecret is 48 random bytes, base64: what `openssl rand -base64 48` prints
+func newSecret() string {
+	b := make([]byte, 48)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("no randomness for a secret: %v", err))
+	}
+	return base64.StdEncoding.EncodeToString(b)
 }

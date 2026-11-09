@@ -261,3 +261,101 @@ func TestValidateRejectsRemovedAdapters(t *testing.T) {
 		}
 	}
 }
+
+// A scaffolded project must not carry a secret anyone who has read this code knows: a fallback
+// JWT key lets them sign tokens, a default admin password lets them sign in.
+func TestScaffoldShipsNoKnownSecrets(t *testing.T) {
+	for name, cfg := range testConfigs() {
+		t.Run(name, func(t *testing.T) {
+			config := GenerateTrokkyConfig(cfg)
+			env := GenerateEnvExample(cfg)
+			for _, known := range []string{"change-me", "change-in-production", "your-secret", "admin123"} {
+				if strings.Contains(config, known) || strings.Contains(env, known) {
+					t.Errorf("generated project contains the known value %q", known)
+				}
+			}
+			if !strings.Contains(config, "jwtSecret: process.env.TROKKY_JWT_SECRET,") {
+				t.Errorf("jwtSecret should read TROKKY_JWT_SECRET with no fallback:\n%s", config)
+			}
+			if !strings.Contains(config, "adminUser: process.env.ADMIN_PASSWORD ? {") {
+				t.Errorf("the admin user should only be created when ADMIN_PASSWORD is set:\n%s", config)
+			}
+			for _, line := range []string{"TROKKY_JWT_SECRET=\n", "TROKKY_CLAIM_SECRET=\n", "ADMIN_PASSWORD=\n"} {
+				if !strings.Contains(env, line) {
+					t.Errorf(".env.example should leave %q empty, to be generated:\n%s", strings.TrimSpace(line), env)
+				}
+			}
+		})
+	}
+}
+
+func TestScaffoldWritesADotEnvWithGeneratedSecrets(t *testing.T) {
+	for name, cfg := range testConfigs() {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "site")
+			if err := Scaffold(cfg, dir); err != nil {
+				t.Fatal(err)
+			}
+			env, err := os.ReadFile(filepath.Join(dir, ".env"))
+			if err != nil {
+				t.Fatalf(".env was not written: %v", err)
+			}
+			secrets := map[string]string{}
+			for _, line := range strings.Split(string(env), "\n") {
+				for _, key := range []string{"TROKKY_JWT_SECRET", "TROKKY_CLAIM_SECRET"} {
+					if strings.HasPrefix(line, key+"=") {
+						secrets[key] = strings.TrimPrefix(line, key+"=")
+					}
+				}
+			}
+			for _, key := range []string{"TROKKY_JWT_SECRET", "TROKKY_CLAIM_SECRET"} {
+				if len(secrets[key]) < 60 {
+					t.Errorf("%s = %q, want a generated value", key, secrets[key])
+				}
+			}
+			if secrets["TROKKY_JWT_SECRET"] == secrets["TROKKY_CLAIM_SECRET"] {
+				t.Error("the two secrets must differ")
+			}
+			info, _ := os.Stat(filepath.Join(dir, ".env"))
+			if info.Mode().Perm() != 0o600 {
+				t.Errorf(".env mode = %v, want 0600", info.Mode().Perm())
+			}
+			example, _ := os.ReadFile(filepath.Join(dir, ".env.example"))
+			if !strings.Contains(string(example), "\nTROKKY_JWT_SECRET=\n") {
+				t.Error(".env.example must keep the secret empty")
+			}
+		})
+	}
+}
+
+func TestScaffoldKeepsAnExistingDotEnv(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("MINE=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Scaffold(TemplateDefaults[TemplateMinimal], dir); err != nil {
+		t.Fatal(err)
+	}
+	if env, _ := os.ReadFile(filepath.Join(dir, ".env")); string(env) != "MINE=1\n" {
+		t.Errorf(".env was overwritten: %q", env)
+	}
+}
+
+func TestScaffoldShipsNoPlaceholderThatSwitchesAFeatureOn(t *testing.T) {
+	cfg := TemplateDefaults[TemplateFull]
+	env := GenerateEnvExample(cfg)
+	for _, placeholder := range []string{"your-client-id", "your-client-secret", "re_xxxxx", "your-site-key"} {
+		if strings.Contains(env, placeholder) {
+			t.Errorf(".env.example contains the placeholder %q", placeholder)
+		}
+	}
+}
+
+func TestClaimInstructionsMatchTheTemplate(t *testing.T) {
+	if got := claimWhere(TemplateDefaults[TemplateAPIOnly]); !strings.Contains(got, "POST /api/auth/claim") {
+		t.Errorf("api-only: %q", got)
+	}
+	if got := claimWhere(TemplateDefaults[TemplateMinimal]); !strings.Contains(got, "Studio") {
+		t.Errorf("minimal: %q", got)
+	}
+}
