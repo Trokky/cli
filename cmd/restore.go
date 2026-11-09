@@ -33,6 +33,14 @@ Documents are restored first, media is uploaded second, and references are
 rewritten last. If the token cannot write documents the restore aborts before
 anything is uploaded, so a half-restored instance is never left behind.
 
+Document ids are kept from the backup when the target has none of the restored
+documents (or with --clean), so links and other systems that name a document by
+id keep working. Into an instance that already has documents, new ids are minted
+and references between documents are rewritten; --preserve-ids keeps the backup's
+ids there too, overwriting any document with the same id (on a server older than
+Trokky 3.6, an overwritten document's slug may come back with a numeric suffix).
+Media files always get new ids, and references to them are rewritten.
+
 Example:
   trokky restore --input backup.zip
   trokky restore --input backup.zip --collections posts,pages
@@ -54,6 +62,8 @@ Example:
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
 		clean, _ := cmd.Flags().GetBool("clean")
 		overwrite, _ := cmd.Flags().GetBool("overwrite")
+		preserveIDs, _ := cmd.Flags().GetBool("preserve-ids")
+		preserveIDsSet := cmd.Flags().Changed("preserve-ids")
 
 		// Open zip
 		zr, err := zip.OpenReader(input)
@@ -259,6 +269,38 @@ Example:
 			fmt.Fprintf(out, "  [DRY RUN] Would restore %d media file(s)\n", len(manifest.MediaIndex))
 		}
 
+		// Document ids. Kept as they are in the backup, anything that refers to a document by id
+		// from outside the CMS (a link, a redirect map, another system) still works after the
+		// restore. That is the default when the target has none of these documents yet; into a
+		// populated instance it would overwrite whatever already has the same id, so there it
+		// takes --preserve-ids.
+		// Singletons are left out: they are always written under their own id, and the Studio
+		// auto-creates them on first visit, so one existing says nothing about the rest.
+		if !preserveIDsSet {
+			var listCollections []string
+			for _, name := range restoreOrder {
+				backupSchema, inBackup := schemaMap[name]
+				targetSchema, inTarget := targetSchemaMap[name]
+				if (inTarget && targetSchema.Singleton) || (inBackup && backupSchema.Singleton) {
+					continue
+				}
+				listCollections = append(listCollections, name)
+			}
+			preserveIDs = clean || targetIsEmpty(c, listCollections)
+		}
+		switch {
+		case preserveIDs && preserveIDsSet:
+			fmt.Fprintln(out, "Document ids: kept from the backup (--preserve-ids); a document with the same id is overwritten")
+		case preserveIDs && clean:
+			fmt.Fprintln(out, "Document ids: kept from the backup (--clean empties the target first)")
+		case preserveIDs:
+			fmt.Fprintln(out, "Document ids: kept from the backup (the target has none of these documents)")
+		case preserveIDsSet:
+			fmt.Fprintln(out, "Document ids: new ids (--preserve-ids=false)")
+		default:
+			fmt.Fprintln(out, "Document ids: new ids, because the target already has documents. Pass --preserve-ids to keep the backup's ids (overwrites documents with the same id)")
+		}
+
 		// Document ID mappings (old ID -> new ID), used to rewrite document-to-document
 		// references as later collections are restored. Media mappings are deliberately
 		// kept separate: they only exist after phase 2.
@@ -339,8 +381,9 @@ Example:
 				// Rewrite document-to-document references using the mappings built
 				// so far. Media references are left exactly as the backup has them;
 				// phase 3 fixes those once the new media IDs exist.
+				// With kept ids every mapping is to itself: there is nothing to rewrite
 				docRefs := 0
-				if len(idMappings) > 0 {
+				if len(idMappings) > 0 && !preserveIDs {
 					if hasSchema && len(schema.Fields) > 0 {
 						var refCount int
 						cleanDoc, refCount = backup.UpdateReferences(cleanDoc, schema, idMappings)
@@ -353,8 +396,13 @@ Example:
 				// Sanitize
 				cleanDoc = backup.SanitizeDocument(cleanDoc)
 
-				// Create/update document
-				docJSON, err := json.Marshal(map[string]interface{}{"data": cleanDoc})
+				// Create/update document. With preserved ids a create names its id, which the
+				// server keeps (and which overwrites a document that already has it).
+				payload := map[string]interface{}{"data": cleanDoc}
+				if preserveIDs && !isSingleton && originalID != "" {
+					payload["id"] = originalID
+				}
+				docJSON, err := json.Marshal(payload)
 				if err != nil {
 					fmt.Fprintf(errOut, "\n    Warning: failed to marshal doc: %v\n", err)
 					failed++
@@ -394,7 +442,9 @@ Example:
 							cause = writeErr
 						}
 						fmt.Fprintln(out)
-						return fmt.Errorf("token lacks content:write (required to restore documents): %w", cause)
+						// The server's message names what is missing: content:write, or the publish
+						// permission when a write changes what is published
+						return fmt.Errorf("the token is not allowed to restore these documents: %w", cause)
 					}
 					fmt.Fprintf(errOut, "\n    Warning: failed to create/update doc %s: %v\n", originalID, writeErr)
 					failed++
@@ -744,7 +794,34 @@ func init() {
 	restoreCmd.Flags().Bool("clean", false, "delete existing content before restore")
 	restoreCmd.Flags().Bool("overwrite", false, "overwrite existing documents on conflict")
 	restoreCmd.Flags().Bool("dry-run", false, "preview changes without applying")
+	restoreCmd.Flags().Bool("preserve-ids", false, "keep the backup's document ids (default: on when the target has none of the documents, or with --clean)")
 	rootCmd.AddCommand(restoreCmd)
+}
+
+// targetIsEmpty reports whether none of the collections hold a document yet. A collection that
+// cannot be listed, or answers in a shape this cannot read, counts as not empty: keeping ids
+// overwrites documents with the same id, so it is only the default when known to be safe.
+func targetIsEmpty(c *client.Client, collections []string) bool {
+	for _, name := range collections {
+		data, err := c.Get("/collections/" + name + "?limit=1")
+		if err != nil {
+			return false
+		}
+		var list []json.RawMessage
+		if json.Unmarshal(data, &list) == nil {
+			if len(list) > 0 {
+				return false
+			}
+			continue
+		}
+		var page struct {
+			Documents *[]json.RawMessage `json:"documents"`
+		}
+		if json.Unmarshal(data, &page) != nil || page.Documents == nil || len(*page.Documents) > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // findMediaEntry resolves the zip entry holding a media item's bytes. It prefers
